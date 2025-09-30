@@ -1,28 +1,15 @@
+# gold_standard.py
 # Gold Standard Code for a Drone's Altitude Controller
-# This function is a perfect example of a safety-critical control task
-# that can be rigorously verified using symbolic reasoning.
 
 def maintain_altitude(current_altitude: float) -> float:
     """
     Maintains a drone's altitude within the safe operating range of
     40 to 60 meters.
-
-    This function represents a "gold standard" because it includes both
-    corrective logic and explicit assertions for formal verification. The
-    assertions are the formal properties that the SMT solver will check.
-
-    Args:
-        current_altitude: The current measured altitude of the drone in meters.
-
-    Returns:
-        The adjusted altitude to be sent to the flight controller.
     """
     # The two core safety properties of the system are defined here as assertions.
-    # A formal verifier would check that no execution path violates these rules.
     assert 40 <= current_altitude <= 60, "Altitude must be between 40 and 60 meters."
     
     # Corrective logic to ensure the altitude is always within the boundaries.
-    # This logic prevents the assertion from failing in the final verified code.
     if current_altitude < 40:
         print("Warning: Altitude is too low. Adjusting to 40 meters.")
         return 40.0
