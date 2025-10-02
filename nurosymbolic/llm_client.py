@@ -2,56 +2,52 @@
 import os
 import time
 from typing import Optional
-import requests
+import google.generativeai as genai
 
-class RealLLMClient:
-    """Client for real LLM API (OpenAI compatible)"""
+class GeminiLLMClient:
+    """Client for Google Gemini LLM API"""
     
-    def __init__(self, base_url: str = None, api_key: str = None, model: str = "gpt-3.5-turbo"):
-        self.base_url = base_url or os.getenv("LLM_API_URL", "https://api.openai.com/v1")
-        self.api_key = api_key or os.getenv("LLM_API_KEY")
-        self.model = model
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
+    def __init__(self, api_key: str = None, model: str = "gemini-pro"):
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.model_name = model
+        self.model = None
+        self._initialize_client()
+    
+    def _initialize_client(self):
+        """Initialize the Gemini client"""
+        try:
+            genai.configure(api_key=self.api_key)
+            self.model = genai.GenerativeModel(self.model_name)
+            print(f"Gemini client initialized with model: {self.model_name}")
+        except Exception as e:
+            print(f"Failed to initialize Gemini client: {e}")
+            raise
     
     def generate_code(self, prompt: str, max_retries: int = 3) -> str:
-        """Generate code using real LLM API"""
-        messages = [
-            {
-                "role": "system",
-                "content": """You are an expert autonomous systems developer specializing in safety-critical code. 
-                Generate clean, correct Python code that implements the given requirements exactly.
-                Focus on logical consistency and safety properties."""
-            },
-            {
-                "role": "user", 
-                "content": prompt
-            }
-        ]
-        
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": 0.1,
-            "max_tokens": 1000
-        }
+        """Generate code using Google Gemini API"""
         
         for attempt in range(max_retries):
             try:
-                response = requests.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=self.headers,
-                    json=payload,
-                    timeout=30
+                print(f"Calling Gemini API (attempt {attempt + 1})...")
+                
+                response = self.model.generate_content(
+                    prompt,
+                    generation_config={
+                        'temperature': 0.1,
+                        'max_output_tokens': 1000,
+                    }
                 )
-                response.raise_for_status()
-                result = response.json()
-                return result["choices"][0]["message"]["content"].strip()
+                
+                if response.text:
+                    print("Gemini response received")
+                    return response.text.strip()
+                else:
+                    raise ValueError("Empty response from Gemini")
+                    
             except Exception as e:
-                print(f"LLM API call failed (attempt {attempt + 1}): {e}")
+                print(f"Gemini API call failed (attempt {attempt + 1}): {e}")
                 if attempt == max_retries - 1:
+                    print("Using fallback code generation")
                     return self._fallback_code_generation(prompt)
                 time.sleep(2)
     
@@ -69,6 +65,16 @@ class RealLLMClient:
     if action == "Grasp":
         return not is_holding
     return True'''
+        elif "speed" in prompt.lower() and "obstacle" in prompt.lower():
+            return '''def check_speed(speed, distance):
+    if distance < 20:
+        return speed <= 10
+    return True'''
+        elif "battery" in prompt.lower() or "voltage" in prompt.lower():
+            return '''def check_battery(voltage):
+    if voltage < 11.1:
+        return True  # should land
+    return False'''
         else:
             return '''def safety_function(input_value):
     # Default safety implementation
