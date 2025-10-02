@@ -3,15 +3,20 @@ from neuro_symbolic_verifier import NeuroSymbolicVerifier
 from llm_client import GeminiLLMClient
 from safety_specification import create_safety_specifications
 import os
+from dotenv import load_dotenv
 
 def setup_environment():
-    """Setup environment and validate API key"""
+    """Setup environment by loading .env file"""
+    load_dotenv()
+    
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key or api_key == "your-gemini-api-key-here":
-        print(" Please set your GEMINI_API_KEY environment variable")
+        print("Please set your GEMINI_API_KEY in the .env file")
         print("   You can get one from: https://aistudio.google.com/app/apikey")
-        print("   Then run: export GEMINI_API_KEY='your-api-key'")
+        print("   Then update the .env file with your actual key")
         return False
+    
+    print(f"Gemini API key loaded (first 10 chars): {api_key[:10]}...")
     return True
 
 def main():
@@ -20,17 +25,19 @@ def main():
     print("Using Google Gemini as LLM backend")
     print("=" * 60)
     
-
+ 
     if not setup_environment():
         return
     
     try:
-
         llm_client = GeminiLLMClient()
         
-
         verifier = NeuroSymbolicVerifier(llm_client)
+        
+
         specifications = create_safety_specifications()
+        
+
         results = []
         for spec in specifications[:2]:  
             result = verifier.run_generate_test_critique_refine(spec, max_iterations=3)
@@ -48,6 +55,7 @@ def main():
                 print(f"   Last counterexample: {result['final_counterexample']}")
             print(f"   Final code:\n{result['final_code']}\n")
         
+
         verifier.print_statistics()
         
     except Exception as e:

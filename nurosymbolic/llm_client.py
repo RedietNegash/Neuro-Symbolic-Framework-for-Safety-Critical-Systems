@@ -1,27 +1,46 @@
 # llm_client.py
 import os
 import time
+import ast  
 from typing import Optional
 import google.generativeai as genai
+from dotenv import load_dotenv
 
 class GeminiLLMClient:
     """Client for Google Gemini LLM API"""
     
-    def __init__(self, api_key: str = None, model: str = "gemini-pro"):
+    def __init__(self, api_key: str = None, model: str = "gemini-2.5-flash"): 
+        load_dotenv()
+        
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
-        self.model_name = model
+        self.model_name = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")  
         self.model = None
         self._initialize_client()
     
     def _initialize_client(self):
         """Initialize the Gemini client"""
         try:
+            if not self.api_key:
+                raise ValueError("GEMINI_API_KEY not found in environment variables or .env file")
+                
             genai.configure(api_key=self.api_key)
             self.model = genai.GenerativeModel(self.model_name)
             print(f"Gemini client initialized with model: {self.model_name}")
         except Exception as e:
             print(f"Failed to initialize Gemini client: {e}")
+            print("Trying to list available models...")
+            self._list_available_models()
             raise
+    
+    def _list_available_models(self):
+        """List available models for debugging"""
+        try:
+            models = genai.list_models()
+            print("Available models:")
+            for model in models:
+                print(f"  - {model.name}")
+        except Exception as e:
+            print(f" Could not list models: {e}")
     
     def generate_code(self, prompt: str, max_retries: int = 3) -> str:
         """Generate code using Google Gemini API"""
@@ -47,7 +66,7 @@ class GeminiLLMClient:
             except Exception as e:
                 print(f"Gemini API call failed (attempt {attempt + 1}): {e}")
                 if attempt == max_retries - 1:
-                    print("Using fallback code generation")
+                    print("🔄 Using fallback code generation")
                     return self._fallback_code_generation(prompt)
                 time.sleep(2)
     

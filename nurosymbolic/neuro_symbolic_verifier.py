@@ -1,6 +1,7 @@
 # neuro_symbolic_verifier.py
+import ast  
 from typing import Dict, List, Tuple, Optional, Any
-from llm_client import RealLLMClient
+from llm_client import GeminiLLMClient
 from safety_specification import SafetySpecification
 from python_to_z3_converter import PythonToZ3Converter
 from z3 import *
@@ -8,7 +9,7 @@ from z3 import *
 class NeuroSymbolicVerifier:
     """Main neuro-symbolic verification framework"""
     
-    def __init__(self, llm_client: RealLLMClient):
+    def __init__(self, llm_client: GeminiLLMClient):
         self.llm = llm_client
         self.verification_stats = {
             "total_verifications": 0,
@@ -84,19 +85,20 @@ class NeuroSymbolicVerifier:
         try:
           
             tree = ast.parse(code_string)
-              
+            
+       
             converter = PythonToZ3Converter(specification.z3_vars)
             converter.visit(tree)
-       
+            
             solver = Solver()
             for assertion in converter.assertions:
                 solver.add(assertion)
             
-        
+       
             property_expr = eval(specification.formal_property, globals(), specification.z3_vars)
             solver.add(Not(property_expr))
             
-           
+    
             result = solver.check()
             
             if result == sat:
@@ -115,7 +117,7 @@ class NeuroSymbolicVerifier:
     def run_generate_test_critique_refine(self, specification: SafetySpecification, 
                                         max_iterations: int = 5) -> Dict:
         """Run the full neuro-symbolic verification cycle"""
-        print(f"\n Starting verification for: {specification.id}")
+        print(f"\nStarting verification for: {specification.id}")
         print(f"Requirement: {specification.requirement}")
         
         iterations = 0
@@ -125,9 +127,9 @@ class NeuroSymbolicVerifier:
         
         for iteration in range(max_iterations):
             iterations += 1
-            print(f"\n Iteration {iteration}")
+            print(f"\nIteration {iteration}")
             
-
+      
             if iteration == 0:
                 prompt = self.generate_initial_prompt(specification)
                 print("Generating initial code...")
@@ -135,13 +137,13 @@ class NeuroSymbolicVerifier:
                 prompt = self.generate_refinement_prompt(specification, current_code, final_counterexample)
                 print("Refining code with counterexample feedback...")
             
-           
+       
             llm_response = self.llm.generate_code(prompt)
             current_code = self.parse_python_code(llm_response)
             print(f"Generated code:\n{current_code}")
             
-            
-            print("🔎 Verifying code with formal methods...")
+      
+            print("Verifying code with formal methods...")
             verification_passed, counterexample = self.verify_code(current_code, specification)
             
             if verification_passed:
@@ -151,7 +153,6 @@ class NeuroSymbolicVerifier:
                 print(f"Verification FAILED - Counterexample: {counterexample}")
                 final_counterexample = counterexample
         
-      
         self._update_stats(verification_passed, iterations)
         
         return {
