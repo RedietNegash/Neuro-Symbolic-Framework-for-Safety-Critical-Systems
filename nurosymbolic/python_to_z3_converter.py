@@ -8,67 +8,101 @@ class PythonToZ3Converter(ast.NodeVisitor):
         self.z3_vars = z3_vars
         self.assertions = []
         self.current_function = None
-        self.return_value = None
+        self.function_return = None
     
     def visit_FunctionDef(self, node):
+        print(f"DEBUG_CONVERTER: Processing function {node.name}")
         self.current_function = node.name
-        self.return_value = None
+        self.function_return = None
+        self.function_return = Bool('function_return')
         
+
         for stmt in node.body:
             self.visit(stmt)
         
-        if self.return_value is not None:
-            self.assertions.append(self.return_value)
+        print(f"DEBUG_CONVERTER: Function {node.name} logic complete")
     
     def visit_Return(self, node):
+        print(f"DEBUG_CONVERTER: Found return statement")
         if node.value:
-            self.return_value = self.convert_to_z3_expr(node.value)
+            return_expr = self.convert_to_z3_expr(node.value)
+            print(f"DEBUG_CONVERTER: Return expression: {return_expr}")
+            
+            pass
     
     def visit_If(self, node):
+        print(f"DEBUG_CONVERTER: Processing if statement")
         condition = self.convert_to_z3_expr(node.test)
+        print(f"DEBUG_CONVERTER: If condition: {condition}")
         
+
         true_return = self._extract_return_value(node.body)
         if true_return is not None:
-            self.assertions.append(Implies(condition, true_return))
+            self.assertions.append(Implies(condition, self.function_return == true_return))
+            print(f"DEBUG_CONVERTER: True branch: if {condition} then return {true_return}")
         
+      
         false_return = self._extract_return_value(node.orelse)
         if false_return is not None:
-            self.assertions.append(Implies(Not(condition), false_return))
+            self.assertions.append(Implies(Not(condition), self.function_return == false_return))
+            print(f"DEBUG_CONVERTER: False branch: if not {condition} then return {false_return}")
+        elif node.orelse:
+            pass
         
         for child in node.body + node.orelse:
             self.visit(child)
     
     def _extract_return_value(self, stmts: List) -> Optional[Any]:
+        """Extract what would be returned from a block of statements"""
         for stmt in stmts:
             if isinstance(stmt, ast.Return) and stmt.value:
-                return self.convert_to_z3_expr(stmt.value)
+                return_val = self.convert_to_z3_expr(stmt.value)
+                print(f"DEBUG_CONVERTER: Extracted return value: {return_val}")
+                return return_val
             elif isinstance(stmt, ast.If):
                 condition = self.convert_to_z3_expr(stmt.test)
                 true_ret = self._extract_return_value(stmt.body)
                 false_ret = self._extract_return_value(stmt.orelse)
                 if true_ret is not None and false_ret is not None:
-                    return If(condition, true_ret, false_ret)
+                    if_expr = If(condition, true_ret, false_ret)
+                    print(f"DEBUG_CONVERTER: Created if expression: {if_expr}")
+                    return if_expr
         return None
-    
+
     def convert_to_z3_expr(self, node) -> Any:
         if node is None:
             return None
             
         if isinstance(node, ast.Compare):
-            return self._convert_comparison(node)
+            result = self._convert_comparison(node)
+            print(f"DEBUG_CONVERTER: Converted comparison: {node} -> {result}")
+            return result
         elif isinstance(node, ast.BoolOp):
-            return self._convert_bool_op(node)
+            result = self._convert_bool_op(node)
+            print(f"DEBUG_CONVERTER: Converted bool op: {node} -> {result}")
+            return result
         elif isinstance(node, ast.UnaryOp):
-            return self._convert_unary_op(node)
+            result = self._convert_unary_op(node)
+            print(f"DEBUG_CONVERTER: Converted unary op: {node} -> {result}")
+            return result
         elif isinstance(node, ast.BinOp):
-            return self._convert_bin_op(node)
+            result = self._convert_bin_op(node)
+            print(f"DEBUG_CONVERTER: Converted bin op: {node} -> {result}")
+            return result
         elif isinstance(node, ast.Name):
-            return self._convert_name(node)
+            result = self._convert_name(node)
+            print(f"DEBUG_CONVERTER: Converted name: {node.id} -> {result}")
+            return result
         elif isinstance(node, ast.Constant):
-            return self._convert_constant(node)
+            result = self._convert_constant(node)
+            print(f"DEBUG_CONVERTER: Converted constant: {node.value} -> {result}")
+            return result
         elif isinstance(node, ast.Call):
-            return self._convert_call(node)
+            result = self._convert_call(node)
+            print(f"DEBUG_CONVERTER: Converted call: {node} -> {result}")
+            return result
         else:
+            print(f"DEBUG_CONVERTER: Unsupported node type: {type(node)}")
             raise ValueError(f"Unsupported AST node: {type(node)}")
     
     def _convert_comparison(self, node: ast.Compare) -> Any:

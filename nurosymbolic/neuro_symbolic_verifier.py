@@ -29,7 +29,22 @@ Create a function that returns True when the safety condition is satisfied and F
 
 Provide only the Python code without explanations.
 """
+    def generate_refinement_prompt(self, specification: SafetySpecification, 
+                                 code: str, counterexample: Dict) -> str:
+        ce_description = self._format_counterexample(counterexample)
+        
+        return f"""
+The previous code had a logical error. Here's what went wrong:
+ORIGINAL REQUIREMENT: {specification.requirement}
 
+BUGGY CODE:
+```python
+{code}
+ERROR FOUND: The code fails when {ce_description}
+
+Please fix the code to handle this case correctly.
+Provide only the corrected Python code.
+"""
     def _format_counterexample(self, counterexample: Dict) -> str:
         if 'error' in counterexample:
             return f"code parsing failed: {counterexample['error']}"
@@ -159,25 +174,55 @@ Provide only the Python code without explanations.
 
     def verify_code(self, code_string: str, specification: SafetySpecification) -> Tuple[bool, Optional[Dict]]:
         try:
+            print("DEBUG_VERIFIER: Starting verification process")
+            print(f"DEBUG_VERIFIER: Code to verify:\n{code_string}")
+            
             tree = ast.parse(code_string)
-            converter = PythonToZ3Converter(specification.z3_vars)
+            print("DEBUG_VERIFIER: Successfully parsed AST")
+            
+            code_safety_var = Bool('code_safety_judgment')
+            extended_z3_vars = specification.z3_vars.copy()
+            extended_z3_vars['function_return'] = code_safety_var  
+            
+            print(f"DEBUG_VERIFIER: Z3 variables: {extended_z3_vars}")
+            
+            converter = PythonToZ3Converter(extended_z3_vars)
             converter.visit(tree)
+            
+            print(f"DEBUG_VERIFIER: Converter created {len(converter.assertions)} assertions")
+            for i, assertion in enumerate(converter.assertions):
+                print(f"DEBUG_VERIFIER: Assertion {i}: {assertion}")
+            
             solver = Solver()
             for assertion in converter.assertions:
                 solver.add(assertion)
+            
+
             property_expr = eval(specification.formal_property, globals(), specification.z3_vars)
-            solver.add(Not(property_expr))
+            print(f"DEBUG_VERIFIER: Safety property: {property_expr}")
+            
+            verification_condition = (code_safety_var != property_expr)
+            solver.add(verification_condition)
+            print(f"DEBUG_VERIFIER: Looking for cases where: {verification_condition}")
+            
             result = solver.check()
+            print(f"DEBUG_VERIFIER: Solver result: {result}")
+            
             if result == sat:
                 model = solver.model()
+                print(f"DEBUG_VERIFIER: Model found: {model}")
                 counterexample = {}
                 for decl in model.decls():
-                    counterexample[decl.name()] = str(model[decl])
+                    if decl.name() not in ['function_return', '__code_output__']:
+                        counterexample[decl.name()] = str(model[decl])
+                print(f"DEBUG_VERIFIER: Counterexample: {counterexample}")
                 return False, counterexample
             else:
+                print("DEBUG_VERIFIER: No counterexample found - code is correct")
                 return True, None
+                
         except Exception as e:
-            print(f"Verification error: {e}")
+            print(f"DEBUG_VERIFIER: Verification error: {e}")
             return False, {"error": str(e)}
 
     def run_generate_test_critique_refine(self, specification: SafetySpecification, max_iterations: int = 5, initial_requirement: str = None) -> Dict:
