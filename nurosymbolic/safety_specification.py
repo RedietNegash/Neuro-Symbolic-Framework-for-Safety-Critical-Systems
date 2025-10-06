@@ -54,12 +54,10 @@ class BugInjector:
     def inject_condition_error(code: str) -> str:
         """Inject conditional logic errors"""
         if "if" in code and "else" in code:
-            # Swap if-else branches
             lines = code.split('\n')
             if_lines = [i for i, line in enumerate(lines) if 'if' in line and ':' in line]
             if if_lines:
                 idx = if_lines[0]
-                # Simple branch inversion
                 return code.replace("if", "if not").replace("not not", "")
         return code
     
@@ -88,10 +86,8 @@ class DatasetGenerator:
         
         for spec in specifications:
             if spec.correct_python_code:
-                # Add correct version
                 dataset.append((spec, spec.correct_python_code, "correct"))
                 
-                # Generate buggy variants
                 buggy_variants = [
                     BugInjector.inject_boundary_error(spec.correct_python_code),
                     BugInjector.inject_condition_error(spec.correct_python_code),
@@ -112,57 +108,35 @@ class DatasetGenerator:
         
         return dataset
 
+
+
 def create_safety_specifications():
-    """Create specifications with correct Python code examples"""
+    """Create specifications following exact document examples from Section 2.1 table"""
     return [
         SafetySpecification(
-            id="drone_altitude_inclusive",
-            requirement="The drone must maintain altitude between 40 and 60 meters, including both endpoints.",
-            ambiguous_prompt="The drone must maintain altitude between 40 and 60 meters.",  
+            id="drone_altitude",
+            requirement="The drone's altitude must always be between 40m and 60m in 'AltHold' mode.",
+            ambiguous_prompt="The drone must maintain altitude between 40 and 60 meters.",
             formal_property="And(altitude >= 40, altitude <= 60)",
             variables={"altitude": "real"},
-            correct_python_code="""def check_altitude(altitude):
-    return altitude >= 40 and altitude <= 60"""
+            correct_python_code="def check_altitude(alt):\n    return 40 <= alt <= 60"
         ),
         SafetySpecification(
-            id="drone_altitude_exclusive", 
-            requirement="The drone must maintain altitude strictly between 40 and 60 meters (exclusive).",
-            ambiguous_prompt="The drone must stay between 40 and 60 meters.", 
-            formal_property="And(altitude > 40, altitude < 60)",
-            variables={"altitude": "real"},
-            correct_python_code="""def check_altitude(altitude):
-    return altitude > 40 and altitude < 60"""
-        ),
-        SafetySpecification(
-            id="robotic_grasp_safety",
-            requirement="The robotic arm must never perform a Grasp action if the object is already held.",
-            ambiguous_prompt="The robot should handle grasping objects safely.", 
-            formal_property="Implies(action == 'Grasp', Not(is_holding))",
-            variables={"is_holding": "bool", "action": "string"},
-            correct_python_code="""def can_grasp(is_holding, action):
-    if action == 'Grasp':
-        return not is_holding
-    return True"""
-        ),
-        SafetySpecification(
-            id="speed_obstacle_conditional",
-            requirement="The drone must reduce speed to under 10 m/s when any obstacle is within 20 meters.",
-            ambiguous_prompt="The drone should slow down near obstacles.", 
+            id="speed_obstacle", 
+            requirement="The drone's speed must never exceed 10m/s when an obstacle is detected within 20m.",
+            ambiguous_prompt="The drone should slow down near obstacles.",
             formal_property="Implies(distance < 20, speed <= 10)",
             variables={"speed": "real", "distance": "real"},
-            correct_python_code="""def check_speed(speed, distance):
-    if distance < 20:
-        return speed <= 10
-    return True"""
+            correct_python_code="def safe_speed(speed, distance):\n    if distance < 20:\n        return speed <= 10\n    return True"
         ),
+
         SafetySpecification(
-            id="battery_emergency", 
-            requirement="The drone must initiate emergency landing when battery voltage drops below 11.1 volts.",
-            ambiguous_prompt="The drone should land when battery is low.", 
-            formal_property="Implies(voltage < 11.1, emergency_land == True)",
-            variables={"voltage": "real", "emergency_land": "bool"},
-            correct_python_code="""def check_battery(voltage):
-    emergency_land = voltage < 11.1
-    return emergency_land"""
+            id="robotic_grasp",
+            requirement="The robotic arm must never perform a Grasp action if the object is already held.",
+            ambiguous_prompt="The robot should handle grasping objects safely.",
+            formal_property="Implies(action_is_Grasp == True, Not(is_holding))", 
+            variables={"is_holding": "bool", "action_is_Grasp": "bool"},
+            correct_python_code="""def can_grasp(is_holding, action_is_Grasp):
+            return not (action_is_Grasp and is_holding)"""
         )
     ]
