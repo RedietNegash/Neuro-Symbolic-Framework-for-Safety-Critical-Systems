@@ -1,296 +1,212 @@
 # neuro_symbolic_verifier.py
-import ast
-from typing import Dict, List, Tuple, Optional, Any
-from llm_client import GeminiLLMClient
-from safety_specification import SafetySpecification
-from python_to_z3_converter import PythonToZ3Converter
+from typing import Dict, List, Optional, Any
 from z3 import *
+import time
+from symbolic_bridge import ASTToZ3Translator
 
-class NeuroSymbolicVerifier:
-    def __init__(self, llm_client: GeminiLLMClient):
-        self.llm = llm_client
-        self.verification_stats = {
-            "total_verifications": 0,
-            "successful_verifications": 0,
-            "failed_verifications": 0,
-            "average_iterations": 0,
-            "total_iterations": 0,
-            "errors_caught": 0,
-            "errors_corrected": 0
-        }
+class FormalVerifier:
+    """
+    Formal Verification Component using SMT Solver
+    As described in Section 2.4 of the document
+    """
     
-    def generate_initial_prompt(self, specification: SafetySpecification, ambiguous_requirement: str) -> str:
-        return f"""
-Generate Python code for this safety requirement:
-
-REQUIREMENT: {ambiguous_requirement}
-
-Create a function that returns True when the safety condition is satisfied and False otherwise.
-
-Provide only the Python code without explanations.
-"""
-    def generate_refinement_prompt(self, specification: SafetySpecification, 
-                                 code: str, counterexample: Dict) -> str:
-        ce_description = self._format_counterexample(counterexample)
+    def __init__(self):
+        self.solver = z3.Solver()
+        self.translator = ASTToZ3Translator()
+    
+    def verify_safety_property(self, python_code: str, safety_property: str, 
+                             specification_vars: Dict) -> Dict[str, Any]:
+        """
+        Formal verification as described in Section 2.4
+        Returns: Dict with verification results and counterexample if violation exists
+        """
+        start_time = time.time()
         
-        return f"""
-The previous code had a logical error. Here's what went wrong:
-ORIGINAL REQUIREMENT: {specification.requirement}
-
-BUGGY CODE:
-```python
-{code}
-ERROR FOUND: The code fails when {ce_description}
-
-Please fix the code to handle this case correctly.
-Provide only the corrected Python code.
-"""
-    def _format_counterexample(self, counterexample: Dict) -> str:
-        if 'error' in counterexample:
-            return f"code parsing failed: {counterexample['error']}"
-        parts = []
-        for var, value in counterexample.items():
-            parts.append(f"{var} = {value}")
-        return "; ".join(parts)
-
-    def parse_python_code(self, code_string: str) -> str:
-        if "```python" in code_string:
-            start = code_string.find("```python") + 9
-            end = code_string.find("```", start)
-            code_string = code_string[start:end].strip()
-        elif "```" in code_string:
-            start = code_string.find("```") + 3
-            end = code_string.find("```", start)
-            code_string = code_string[start:end].strip()
-        return code_string
-
-    def verify_code(self, code_string: str, specification: SafetySpecification) -> Tuple[bool, Optional[Dict]]:
         try:
-            tree = ast.parse(code_string)
-            converter = PythonToZ3Converter(specification.z3_vars)
-            converter.visit(tree)
-            solver = Solver()
-            for assertion in converter.assertions:
-                solver.add(assertion)
-            property_expr = eval(specification.formal_property, globals(), specification.z3_vars)
-            solver.add(Not(property_expr))
-            result = solver.check()
-            if result == sat:
-                model = solver.model()
-                counterexample = {}
-                for decl in model.decls():
-                    counterexample[decl.name()] = str(model[decl])
-                return False, counterexample
+            # Step 1: Parse Python code to Z3 using symbolic bridge
+            code_z3_expr = self.translator.python_code_to_z3(python_code)
+            
+            # Step 2: Create Z3 variables from specification
+            z3_vars = {}
+            for var_name, var_type in specification_vars.items():
+                if var_type == "int":
+                    z3_vars[var_name] = Int(var_name)
+                elif var_type == "real":
+                    z3_vars[var_name] = Real(var_name)
+                elif var_type == "bool":
+                    z3_vars[var_name] = Bool(var_name)
+                elif var_type == "string":
+                    z3_vars[var_name] = String(var_name)
+            
+            # Step 3: Convert safety property string to Z3 expression
+            safety_z3 = eval(safety_property, globals(), z3_vars)
+            
+            # Step 4: Assert NEGATION of safety property (critical step)
+            negated_safety = z3.Not(safety_z3)
+            
+            # Step 5: Reset solver and add constraints
+            self.solver.reset()
+            self.solver.add(code_z3_expr)
+            self.solver.add(negated_safety)
+            
+            # Step 6: Check satisfiability
+            result = self.solver.check()
+            
+            verification_time = time.time() - start_time
+            
+            # Step 7: Interpret results
+            if result == z3.unsat:
+                return {
+                    'verified': True,
+                    'counterexample': None,
+                    'reason': 'Property always holds',
+                    'verification_time': verification_time
+                }
+            elif result == z3.sat:
+                model = self.solver.model()
+                counterexample = self._extract_counterexample(model, z3_vars)
+                return {
+                    'verified': False,
+                    'counterexample': counterexample,
+                    'reason': 'Property violation found',
+                    'verification_time': verification_time
+                }
             else:
-                return True, None
-        except Exception as e:
-            print(f"Verification error: {e}")
-            return False, {"error": str(e)}
-
-    def run_generate_test_critique_refine(self, specification: SafetySpecification, max_iterations: int = 5, initial_requirement: str = None) -> Dict:
-        requirement = initial_requirement or specification.requirement
-        print(f"Starting verification for: {specification.id}")
-        print(f"Requirement: {requirement}")
-        iterations = 0
-        current_code = None
-        verification_passed = False
-        final_counterexample = None
-        initial_error = False
-        for iteration in range(max_iterations):
-            iterations += 1
-            print(f"Iteration {iteration}")
-            if iteration == 0:
-                prompt = self.generate_initial_prompt(specification, requirement)
-                print("Generating initial code")
-            else:
-                prompt = self.generate_refinement_prompt(specification, current_code, final_counterexample)
-                print("Refining code with counterexample feedback")
-            llm_response = self.llm.generate_code(prompt, specification.id, is_refinement=(iteration > 0))
-            current_code = self.parse_python_code(llm_response)
-            print(f"Generated code:\n{current_code}")
-            print("Verifying code with formal methods")
-            verification_passed, counterexample = self.verify_code(current_code, specification)
-            if verification_passed:
-                print("Verification PASSED - Code is logically consistent")
-                if iteration > 0:
-                    self.verification_stats["errors_corrected"] += 1
-                break
-            else:
-                print(f"Verification FAILED - Counterexample: {counterexample}")
-                final_counterexample = counterexample
-                if iteration == 0:
-                    initial_error = True
-                    self.verification_stats["errors_caught"] += 1
-        self._update_stats(verification_passed, iterations)
-        return {
-            "specification_id": specification.id,
-            "verification_passed": verification_passed,
-            "iterations": iterations,
-            "final_code": current_code,
-            "final_counterexample": final_counterexample if not verification_passed else None,
-            "initial_error": initial_error
-        }
-
-    def _update_stats(self, passed: bool, iterations: int):
-        self.verification_stats["total_verifications"] += 1
-        self.verification_stats["total_iterations"] += iterations
-        if passed:
-            self.verification_stats["successful_verifications"] += 1
-        else:
-            self.verification_stats["failed_verifications"] += 1
-        self.verification_stats["average_iterations"] = (
-            self.verification_stats["total_iterations"] / 
-            self.verification_stats["total_verifications"]
-        )
-
-    def print_statistics(self):
-        print("\n" + "="*50)
-        print("NEURO-SYMBOLIC VERIFICATION STATISTICS")
-        print("="*50)
-        stats = self.verification_stats
-        print(f"Total Verifications: {stats['total_verifications']}")
-        print(f"Successful: {stats['successful_verifications']}")
-        print(f"Failed: {stats['failed_verifications']}")
-        success_rate = (stats['successful_verifications']/stats['total_verifications'])*100
-        print(f"Success Rate: {success_rate:.1f}%")
-        print(f"Average Iterations: {stats['average_iterations']:.1f}")
-        print(f"Errors Caught: {stats['errors_caught']}")
-        print(f"Errors Corrected: {stats['errors_corrected']}")
-        parts = []
-        for var, value in counterexample.items():
-            parts.append(f"{var} = {value}")
-        return "; ".join(parts)
-
-    def parse_python_code(self, code_string: str) -> str:
-        if "```python" in code_string:
-            start = code_string.find("```python") + 9
-            end = code_string.find("```", start)
-            code_string = code_string[start:end].strip()
-        elif "```" in code_string:
-            start = code_string.find("```") + 3
-            end = code_string.find("```", start)
-            code_string = code_string[start:end].strip()
-        return code_string
-
-    def verify_code(self, code_string: str, specification: SafetySpecification) -> Tuple[bool, Optional[Dict]]:
-        try:
-            print("DEBUG_VERIFIER: Starting verification process")
-            print(f"DEBUG_VERIFIER: Code to verify:\n{code_string}")
-            
-            tree = ast.parse(code_string)
-            print("DEBUG_VERIFIER: Successfully parsed AST")
-            
-            code_safety_var = Bool('code_safety_judgment')
-            extended_z3_vars = specification.z3_vars.copy()
-            extended_z3_vars['function_return'] = code_safety_var  
-            
-            print(f"DEBUG_VERIFIER: Z3 variables: {extended_z3_vars}")
-            
-            converter = PythonToZ3Converter(extended_z3_vars)
-            converter.visit(tree)
-            
-            print(f"DEBUG_VERIFIER: Converter created {len(converter.assertions)} assertions")
-            for i, assertion in enumerate(converter.assertions):
-                print(f"DEBUG_VERIFIER: Assertion {i}: {assertion}")
-            
-            solver = Solver()
-            for assertion in converter.assertions:
-                solver.add(assertion)
-            
-
-            property_expr = eval(specification.formal_property, globals(), specification.z3_vars)
-            print(f"DEBUG_VERIFIER: Safety property: {property_expr}")
-            
-            verification_condition = (code_safety_var != property_expr)
-            solver.add(verification_condition)
-            print(f"DEBUG_VERIFIER: Looking for cases where: {verification_condition}")
-            
-            result = solver.check()
-            print(f"DEBUG_VERIFIER: Solver result: {result}")
-            
-            if result == sat:
-                model = solver.model()
-                print(f"DEBUG_VERIFIER: Model found: {model}")
-                counterexample = {}
-                for decl in model.decls():
-                    if decl.name() not in ['function_return', '__code_output__']:
-                        counterexample[decl.name()] = str(model[decl])
-                print(f"DEBUG_VERIFIER: Counterexample: {counterexample}")
-                return False, counterexample
-            else:
-                print("DEBUG_VERIFIER: No counterexample found - code is correct")
-                return True, None
+                return {
+                    'verified': False,
+                    'counterexample': None,
+                    'reason': 'Solver could not determine (unknown)',
+                    'verification_time': verification_time
+                }
                 
         except Exception as e:
-            print(f"DEBUG_VERIFIER: Verification error: {e}")
-            return False, {"error": str(e)}
+            return {
+                'verified': False,
+                'counterexample': None,
+                'reason': f'Verification error: {str(e)}',
+                'verification_time': time.time() - start_time
+            }
+    
+    def _extract_counterexample(self, model, z3_vars: Dict) -> Dict:
+        """Extract human-readable counterexample from Z3 model"""
+        counterexample = {}
+        for var_name, z3_var in z3_vars.items():
+            try:
+                if z3.is_int_value(z3_var) or z3.is_real_value(z3_var):
+                    counterexample[var_name] = model[z3_var].as_decimal(2)
+                elif z3.is_bool(z3_var):
+                    counterexample[var_name] = model[z3_var]
+                elif z3.is_string(z3_var):
+                    counterexample[var_name] = model[z3_var]
+            except:
+                counterexample[var_name] = "unknown"
+        
+        return counterexample
 
-    def run_generate_test_critique_refine(self, specification: SafetySpecification, max_iterations: int = 5, initial_requirement: str = None) -> Dict:
+class NeuroSymbolicVerifier:
+    """
+    Enhanced Neuro-Symbolic Verifier with all components from the document
+    """
+    
+    def __init__(self, llm_client):
+        self.llm_client = llm_client
+        self.formal_verifier = FormalVerifier()
+        self.metrics = {
+            'total_iterations': 0,
+            'successful_verifications': 0,
+            'failed_verifications': 0,
+            'total_verification_time': 0.0
+        }
+    
+    def run_generate_test_critique_refine(self, specification, max_iterations=5, initial_requirement=None):
+        """Enhanced refinement loop with formal verification"""
+        
         requirement = initial_requirement or specification.requirement
-        print(f"Starting verification for: {specification.id}")
-        print(f"Requirement: {requirement}")
-        iterations = 0
-        current_code = None
-        verification_passed = False
-        final_counterexample = None
-        initial_error = False
+        iterations = []
+        
         for iteration in range(max_iterations):
-            iterations += 1
-            print(f"Iteration {iteration}")
+            print(f"\n--- Iteration {iteration + 1} ---")
+            
+            # Step 1: Generate code using LLM
             if iteration == 0:
-                prompt = self.generate_initial_prompt(specification, requirement)
-                print("Generating initial code")
+                prompt = self._create_initial_prompt(requirement, specification)
             else:
-                prompt = self.generate_refinement_prompt(specification, current_code, final_counterexample)
-                print("Refining code with counterexample feedback")
-            llm_response = self.llm.generate_code(prompt, specification.id, is_refinement=(iteration > 0))
-            current_code = self.parse_python_code(llm_response)
-            print(f"Generated code:\n{current_code}")
-            print("Verifying code with formal methods")
-            verification_passed, counterexample = self.verify_code(current_code, specification)
-            if verification_passed:
-                print("Verification PASSED - Code is logically consistent")
-                if iteration > 0:
-                    self.verification_stats["errors_corrected"] += 1
+                prompt = self._create_feedback_prompt(requirement, iterations[-1])
+            
+            generated_code = self.llm_client.generate_code(prompt)
+            print(f"Generated Code:\n{generated_code}")
+            
+            # Step 2: Formal Verification
+            verification_result = self.formal_verifier.verify_safety_property(
+                generated_code, 
+                specification.formal_property,
+                specification.variables
+            )
+            
+            # Update metrics
+            self.metrics['total_iterations'] += 1
+            self.metrics['total_verification_time'] += verification_result['verification_time']
+            
+            iteration_result = {
+                'iteration': iteration + 1,
+                'generated_code': generated_code,
+                'verification_result': verification_result,
+                'prompt_used': prompt
+            }
+            iterations.append(iteration_result)
+            
+            print(f"Verification: {verification_result['reason']}")
+            print(f"Time: {verification_result['verification_time']:.3f}s")
+            
+            if verification_result['verified']:
+                self.metrics['successful_verifications'] += 1
                 break
             else:
-                print(f"Verification FAILED - Counterexample: {counterexample}")
-                final_counterexample = counterexample
-                if iteration == 0:
-                    initial_error = True
-                    self.verification_stats["errors_caught"] += 1
-        self._update_stats(verification_passed, iterations)
+                self.metrics['failed_verifications'] += 1
+                if verification_result['counterexample']:
+                    print(f"Counterexample: {verification_result['counterexample']}")
+        
+        final_verification_passed = iterations[-1]['verification_result']['verified']
+        
         return {
-            "specification_id": specification.id,
-            "verification_passed": verification_passed,
-            "iterations": iterations,
-            "final_code": current_code,
-            "final_counterexample": final_counterexample if not verification_passed else None,
-            "initial_error": initial_error
+            'specification_id': specification.id,
+            'iterations': len(iterations),
+            'verification_passed': final_verification_passed,
+            'iteration_details': iterations,
+            'final_code': iterations[-1]['generated_code'],
+            'metrics': self.metrics.copy()
         }
+    
+    def _create_initial_prompt(self, requirement, specification):
+        """Create structured initial prompt as described in Section 2.2"""
+        return f"""You are an expert autonomous system control logic developer. Generate Python code that implements the following requirement:
 
-    def _update_stats(self, passed: bool, iterations: int):
-        self.verification_stats["total_verifications"] += 1
-        self.verification_stats["total_iterations"] += iterations
-        if passed:
-            self.verification_stats["successful_verifications"] += 1
-        else:
-            self.verification_stats["failed_verifications"] += 1
-        self.verification_stats["average_iterations"] = (
-            self.verification_stats["total_iterations"] / 
-            self.verification_stats["total_verifications"]
-        )
+REQUIREMENT: {requirement}
 
-    def print_statistics(self):
-        print("\n" + "="*50)
-        print("NEURO-SYMBOLIC VERIFICATION STATISTICS")
-        print("="*50)
-        stats = self.verification_stats
-        print(f"Total Verifications: {stats['total_verifications']}")
-        print(f"Successful: {stats['successful_verifications']}")
-        print(f"Failed: {stats['failed_verifications']}")
-        success_rate = (stats['successful_verifications']/stats['total_verifications'])*100
-        print(f"Success Rate: {success_rate:.1f}%")
-        print(f"Average Iterations: {stats['average_iterations']:.1f}")
-        print(f"Errors Caught: {stats['errors_caught']}")
-        print(f"Errors Corrected: {stats['errors_corrected']}")
+SAFETY CONSTRAINTS (NON-NEGOTIABLE):
+- The code must satisfy: {specification.formal_property}
+- Variables: {specification.variables}
+
+Generate clean, correct Python code that implements this requirement while strictly adhering to all safety constraints. Return only the Python code without explanations."""
+
+    def _create_feedback_prompt(self, requirement, previous_iteration):
+        """Create feedback prompt with counterexample as described in Section 2.5"""
+        verification = previous_iteration['verification_result']
+        counterexample = verification.get('counterexample', {})
+        
+        counterexample_text = "\n".join([f"- {k} = {v}" for k, v in counterexample.items()])
+        
+        return f"""Previous code failed formal verification. Here's the specific issue:
+
+REQUIREMENT: {requirement}
+
+PREVIOUS CODE:
+{previous_iteration['generated_code']}
+
+VERIFICATION FAILURE:
+{verification['reason']}
+
+COUNTEREXAMPLE (violating scenario):
+{counterexample_text}
+
+Generate corrected Python code that fixes this specific logical flaw. Ensure the new code handles the counterexample scenario correctly while still satisfying the original requirement. Return only the Python code without explanations."""
