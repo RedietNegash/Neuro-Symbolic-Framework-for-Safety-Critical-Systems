@@ -1,15 +1,15 @@
-# neuro_symbolic_verifier.py
-import ast  
+import ast
 from typing import Dict, List, Tuple, Optional, Any
 from llm_client import GeminiLLMClient
+from llm_client_llama import LlamaLLMClient
 from safety_specification import SafetySpecification
 from python_to_z3_converter import PythonToZ3Converter
 from z3 import *
 
 class NeuroSymbolicVerifier:
     """Main neuro-symbolic verification framework"""
-    
-    def __init__(self, llm_client: GeminiLLMClient):
+    #defune to select active LLM model
+    def __init__(self, llm_client: Any):
         self.llm = llm_client
         self.verification_stats = {
             "total_verifications": 0,
@@ -18,46 +18,36 @@ class NeuroSymbolicVerifier:
             "average_iterations": 0,
             "total_iterations": 0
         }
+
     
     def generate_initial_prompt(self, specification: SafetySpecification) -> str:
         """Generate initial prompt for LLM"""
+        variable_names = ", ".join(specification.variables.keys())
+
         return f"""
-        SAFETY-CRITICAL CODE GENERATION TASK
-        
-        REQUIREMENT: {specification.requirement}
-        
-        Please generate a Python function that implements this requirement exactly.
-        The function should return True when the safety condition is satisfied and False otherwise.
-        
-        Important safety constraints:
-        - The code must be logically correct and handle all edge cases
-        - Use clear variable names and simple logic
-        - Focus on the core safety property
-        
-        Generate only the Python function code without any explanations.
+        Write a Python function for this safety requirement: "{specification.requirement}"
+        - Use these exact variable names: {variable_names}
+        - Return True if the safety condition is met, False otherwise
+        - Keep the logic simple and handle edge cases
+        - Output only the Python function code, no comments or explanations
         """
+    
     
     def generate_refinement_prompt(self, specification: SafetySpecification, 
                                  code: str, counterexample: Dict) -> str:
         """Generate refinement prompt with counterexample feedback"""
         ce_description = self._format_counterexample(counterexample)
-        
+        variable_names = ", ".join(specification.variables.keys())
         return f"""
-        CODE REFINEMENT TASK
-        
-        ORIGINAL REQUIREMENT: {specification.requirement}
-        
-        PREVIOUS CODE (has logical error):
+        Fix this Python function to meet the safety requirement: "{specification.requirement}"
+        Current code (has errors):
         ```python
         {code}
         ```
-        
-        VERIFICATION FAILED: The code violates the safety property.
-        
-        COUNTEREXAMPLE: {ce_description}
-        
-        Please fix the code to handle this case correctly while still satisfying the original requirement.
-        Generate only the corrected Python function code without any explanations.
+        Error: {ce_description}
+        - Use these exact variable names: {variable_names}
+        - Return True if the safety condition is met, False otherwise
+        - Output only the corrected Python function code, no comments or explanations
         """
     
     def _format_counterexample(self, counterexample: Dict) -> str:
@@ -83,10 +73,7 @@ class NeuroSymbolicVerifier:
     def verify_code(self, code_string: str, specification: SafetySpecification) -> Tuple[bool, Optional[Dict]]:
         """Verify code against formal specification using Z3"""
         try:
-          
             tree = ast.parse(code_string)
-            
-       
             converter = PythonToZ3Converter(specification.z3_vars)
             converter.visit(tree)
             
@@ -94,11 +81,9 @@ class NeuroSymbolicVerifier:
             for assertion in converter.assertions:
                 solver.add(assertion)
             
-       
             property_expr = eval(specification.formal_property, globals(), specification.z3_vars)
             solver.add(Not(property_expr))
             
-    
             result = solver.check()
             
             if result == sat:
@@ -129,7 +114,6 @@ class NeuroSymbolicVerifier:
             iterations += 1
             print(f"\nIteration {iteration}")
             
-      
             if iteration == 0:
                 prompt = self.generate_initial_prompt(specification)
                 print("Generating initial code...")
@@ -137,12 +121,10 @@ class NeuroSymbolicVerifier:
                 prompt = self.generate_refinement_prompt(specification, current_code, final_counterexample)
                 print("Refining code with counterexample feedback...")
             
-       
             llm_response = self.llm.generate_code(prompt)
             current_code = self.parse_python_code(llm_response)
             print(f"Generated code:\n{current_code}")
             
-      
             print("Verifying code with formal methods...")
             verification_passed, counterexample = self.verify_code(current_code, specification)
             
