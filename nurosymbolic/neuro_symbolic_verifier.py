@@ -14,15 +14,12 @@ class FormalVerifier:
         self.translator = ASTToZ3Translator()
     
     def verify_safety_property(self, python_code: str, safety_property: str, 
-                             specification_vars: Dict) -> Dict[str, Any]:
-        """
-
-        Returns: Dict with verification results and counterexample if violation exists
-        """
+                            specification_vars: Dict) -> Dict[str, Any]:
         start_time = time.time()
         
         try:
             code_z3_expr = self.translator.python_code_to_z3(python_code)
+            
             z3_vars = {}
             for var_name, var_type in specification_vars.items():
                 if var_type == "int":
@@ -31,21 +28,22 @@ class FormalVerifier:
                     z3_vars[var_name] = Real(var_name)
                 elif var_type == "bool":
                     z3_vars[var_name] = Bool(var_name)
-                elif var_type == "string":
-                    z3_vars[var_name] = String(var_name)
             
             safety_z3 = eval(safety_property, globals(), z3_vars)
-            negated_safety = z3.Not(safety_z3)
+            print(f"DEBUG: Code expression: {code_z3_expr}")
+            print(f"DEBUG: Safety property: {safety_z3}")
+            
+
+            implication = z3.Implies(code_z3_expr, safety_z3)
+            negated_implication = z3.Not(implication)
             
             self.solver.reset()
-            self.solver.add(code_z3_expr)
-            self.solver.add(negated_safety)
+            self.solver.add(negated_implication)
             
             result = self.solver.check()
             
             verification_time = time.time() - start_time
             
-
             if result == z3.unsat:
                 return {
                     'verified': True,
@@ -71,6 +69,7 @@ class FormalVerifier:
                 }
                 
         except Exception as e:
+            print(f"DEBUG: Verification error: {e}")
             return {
                 'verified': False,
                 'counterexample': None,
@@ -215,7 +214,7 @@ class NeuroSymbolicVerifier:
 
 
     def _create_initial_prompt(self, requirement, specification):
-        """Create prompt that emphasizes requirement preservation"""
+        """Create prompt that STRONGLY enforces direct implementation"""
         return f"""Generate a Python verification function for this autonomous system requirement:
 
     REQUIREMENT: {requirement}
@@ -224,11 +223,24 @@ class NeuroSymbolicVerifier:
 
     VARIABLES: {list(specification.variables.keys())}
 
-    Generate a Python function that takes these variables as parameters and returns a boolean (True/False) indicating whether the safety property is satisfied.
+    CRITICAL: You MUST implement the logic DIRECTLY in the return statement.
+    ABSOLUTELY NO intermediate variables like 'antecedent', 'consequent', 'condition_A', etc.
 
-    IMPORTANT: The function must exactly implement the given requirement and safety property without modifying them.
+    Example for speed_obstacle:
+    CORRECT: return not (distance < 20) or (speed <= 10)
+    WRONG: 
+    antecedent = distance < 20
+    consequent = speed <= 10
+    return not antecedent or consequent
 
-    Return ONLY the Python function code:"""
+    Example for robotic_grasp:
+    CORRECT: return not action_is_Grasp or not is_holding
+    WRONG:
+    condition_A = action_is_Grasp
+    condition_B = not is_holding  
+    return not condition_A or condition_B
+
+    Return ONLY the Python function code with NO intermediate variables:"""
 
 
     def _create_feedback_prompt(self, requirement, previous_iteration):

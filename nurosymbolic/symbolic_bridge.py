@@ -5,15 +5,16 @@ from typing import Dict, Any, List
 
 class ASTToZ3Translator:
     """
-    Fixed Symbolic Bridge Component
+    Fixed Symbolic Bridge Component with Robust Inlining
     """
     
     def __init__(self):
         self.variables = {}
         self.current_function = None
+        self.condition_assignments = {}  
         
     def python_code_to_z3(self, code_snippet: str, function_name: str = None) -> z3.BoolRef:
-        """Parse Python code and convert to Z3 expressions - handle document patterns"""
+        """Parse Python code and convert to Z3 expressions"""
         try:
             clean_code = self._clean_document_code(code_snippet)
             
@@ -23,6 +24,7 @@ class ASTToZ3Translator:
             tree = ast.parse(clean_code)
             self.current_function = function_name
             self.variables = {}
+            self.condition_assignments = {}
             
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef):
@@ -42,6 +44,15 @@ class ASTToZ3Translator:
     
     def visit_FunctionDef(self, node):
         """Visit function definition"""
+        for stmt in node.body:
+            if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+                target = stmt.targets[0]
+                if isinstance(target, ast.Name):
+                    var_name = target.id
+                    if self._is_condition_variable_name(var_name):
+                        self.condition_assignments[var_name] = stmt.value
+        
+
         conditions = []
         return_found = False
         
@@ -68,7 +79,6 @@ class ASTToZ3Translator:
         """Visit if statement - convert to implication"""
         test_condition = self.visit(node.test)
         
-
         then_conditions = []
         for stmt in node.body:
             result = self.visit(stmt)
@@ -80,7 +90,6 @@ class ASTToZ3Translator:
         
         then_expr = z3.And(then_conditions) if then_conditions else z3.BoolVal(True)
         
-
         else_conditions = []
         for stmt in node.orelse:
             result = self.visit(stmt)
@@ -97,25 +106,21 @@ class ASTToZ3Translator:
             z3.Implies(z3.Not(test_condition), else_expr)
         )
 
-
     def visit_Compare(self, node):
-        """Visit comparison operations with simplified string handling"""
+        """Visit comparison operations"""
         left = self.visit(node.left)
         
         if len(node.ops) == 1 and len(node.comparators) == 1:
             op = node.ops[0]
             right = self.visit(node.comparators[0])
             
-
             if (hasattr(left, 'sort') and left.sort() == z3.StringSort()) or \
             (hasattr(right, 'sort') and right.sort() == z3.StringSort()):
                 
                 if isinstance(op, ast.Eq):
-                    comp_var = z3.Bool(f"str_eq_{str(left)}_{str(right)}")
-                    return comp_var
+                    return z3.Bool(f"str_eq_{str(left)}_{str(right)}")
                 elif isinstance(op, ast.NotEq):
-                    comp_var = z3.Bool(f"str_neq_{str(left)}_{str(right)}")
-                    return z3.Not(comp_var)
+                    return z3.Not(z3.Bool(f"str_neq_{str(left)}_{str(right)}"))
                 else:
                     return z3.BoolVal(True)
             else:
@@ -155,15 +160,34 @@ class ASTToZ3Translator:
             return left == right
     
     def visit_BoolOp(self, node):
-        """Visit boolean operations (and, or)"""
+        """Visit boolean operations with robust type casting"""
         values = [self.visit(value) for value in node.values]
         
+        bool_values = []
+        for val in values:
+            if hasattr(val, 'sort'):
+                if val.sort() == z3.BoolSort():
+                    bool_values.append(val)
+                else:
+                    bool_values.append(val != 0)
+            else:
+                bool_values.append(z3.BoolVal(bool(val)))
+        
         if isinstance(node.op, ast.And):
-            return z3.And(values)
+            return z3.And(bool_values)
         elif isinstance(node.op, ast.Or):
-            return z3.Or(values)
+            return z3.Or(bool_values)
         else:
-            return z3.And(values)
+            return z3.And(bool_values)
+
+    def visit_UnaryOp(self, node):
+        """Visit unary operations (not) with proper type handling"""
+        if isinstance(node.op, ast.Not):
+            operand = self.visit(node.operand)
+            if hasattr(operand, 'sort') and operand.sort() != z3.BoolSort():
+                return z3.Not(operand != 0)
+            return z3.Not(operand)
+        return self.generic_visit(node)
     
     def visit_BinOp(self, node):
         """Visit binary operations"""
@@ -180,11 +204,15 @@ class ASTToZ3Translator:
             return left / right
         else:
             return left
-    
 
     def visit_Name(self, node):
-        """Visit variable names - use boolean variables for actions"""
+        """Visit variable names - inline condition variables"""
         var_name = node.id
+        
+        if var_name in self.condition_assignments:
+            return self.visit(self.condition_assignments[var_name])
+        
+
         if var_name not in self.variables:
             if var_name == "action":
                 self.variables[var_name] = z3.Bool(f"action_is_Grasp")
@@ -194,6 +222,7 @@ class ASTToZ3Translator:
                 self.variables[var_name] = z3.Real(var_name)
             else:
                 self.variables[var_name] = z3.Real(var_name)
+        
         return self.variables[var_name]
     
     def visit_Constant(self, node):
@@ -210,25 +239,27 @@ class ASTToZ3Translator:
             return z3.IntVal(0)
     
     def visit_Assign(self, node):
-        """Visit assignment statements with proper type inference"""
+        """Visit assignment statements - track condition variables but don't create Z3 variables"""
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             var_name = node.targets[0].id
+            if self._is_condition_variable_name(var_name):
+                return z3.BoolVal(True) 
             value = self.visit(node.value)
-            
-            print(f"DEBUG Assignment: {var_name} = {ast.dump(node.value)}")
-            print(f"DEBUG Value type: {type(value)}")
             
             if var_name not in self.variables:
                 if self._expression_produces_boolean(node.value):
                     self.variables[var_name] = z3.Bool(var_name)
-                    print(f"DEBUG: Created {var_name} as Boolean")
                 else:
                     self.variables[var_name] = z3.Real(var_name)
-                    print(f"DEBUG: Created {var_name} as Real")
             
             return self.variables[var_name] == value
         
         return z3.BoolVal(True)
+
+    def _is_condition_variable_name(self, var_name):
+        """Check if variable name indicates it's a condition variable"""
+        condition_patterns = ['condition_', 'premise_', 'consequent_', 'antecedent_', 'conclusion_']
+        return any(pattern in var_name for pattern in condition_patterns)
 
     def _expression_produces_boolean(self, ast_node):
         """Check if an AST node produces a Boolean result"""
@@ -265,6 +296,3 @@ class ASTToZ3Translator:
                 clean_lines.append(line)
         
         return '\n'.join(clean_lines) if clean_lines else code
-
-    
-    
