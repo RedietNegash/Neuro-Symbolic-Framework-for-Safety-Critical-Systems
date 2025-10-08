@@ -1,4 +1,3 @@
-# neuro_symbolic_verifier.py
 from typing import Dict, List, Optional, Any
 from z3 import *
 import time
@@ -28,12 +27,13 @@ class FormalVerifier:
                     z3_vars[var_name] = Real(var_name)
                 elif var_type == "bool":
                     z3_vars[var_name] = Bool(var_name)
+                elif var_type == "string":
+                    z3_vars[var_name] = String(var_name)
             
             safety_z3 = eval(safety_property, globals(), z3_vars)
             print(f"DEBUG: Code expression: {code_z3_expr}")
             print(f"DEBUG: Safety property: {safety_z3}")
             
-
             implication = z3.Implies(code_z3_expr, safety_z3)
             negated_implication = z3.Not(implication)
             
@@ -147,6 +147,7 @@ class NeuroSymbolicVerifier:
         self.llm_client = llm_client
         self.formal_verifier = FormalVerifier()
         self.metrics = {
+            'total_specifications': 0,
             'total_iterations': 0,
             'successful_verifications': 0,
             'failed_verifications': 0,
@@ -155,14 +156,13 @@ class NeuroSymbolicVerifier:
     
     def run_generate_test_critique_refine(self, specification, max_iterations=5, initial_requirement=None):
         """Enhanced refinement loop with formal verification"""
-        
+        self.metrics['total_specifications'] += 1
         requirement = initial_requirement or specification.requirement
         iterations = []
         
         for iteration in range(max_iterations):
-            print(f"\n--- Iteration {iteration + 1} ---")
+            print(f"\n--- Iteration {iteration + 1} for {specification.id} ---")
             
-
             if iteration == 0:
                 prompt = self._create_initial_prompt(requirement, specification)
             else:
@@ -171,7 +171,6 @@ class NeuroSymbolicVerifier:
             generated_code = self.llm_client.generate_code(prompt)
             print(f"Generated Code:\n{generated_code}")
             
-
             verification_result = self.formal_verifier.verify_safety_property(
                 generated_code, 
                 specification.formal_property,
@@ -208,13 +207,33 @@ class NeuroSymbolicVerifier:
             'verification_passed': final_verification_passed,
             'iteration_details': iterations,
             'final_code': iterations[-1]['generated_code'],
+            'final_counterexample': iterations[-1]['verification_result']['counterexample'],
             'metrics': self.metrics.copy()
         }
     
-
+    def print_statistics(self):
+        """Print verification statistics"""
+        print("\n" + "="*60)
+        print("NEURO-SYMBOLIC VERIFICATION STATISTICS")
+        print("="*60)
+        stats = self.metrics
+        total = stats['total_specifications']
+        success_rate = (stats['successful_verifications'] / total * 100) if total > 0 else 0
+        avg_iterations = stats['total_iterations'] / total if total > 0 else 0
+        print(f"Total Specifications: {total}")
+        print(f"Successful Verifications: {stats['successful_verifications']}")
+        print(f"Failed Verifications: {stats['failed_verifications']}")
+        print(f"Success Rate: {success_rate:.1f}%")
+        print(f"Average Iterations per Specification: {avg_iterations:.1f}")
+        print(f"Total Verification Time: {stats['total_verification_time']:.3f}s")
 
     def _create_initial_prompt(self, requirement, specification):
         """Create prompt that STRONGLY enforces direct implementation"""
+        func_name = {
+            "drone_altitude": "check_altitude(altitude)",
+            "speed_obstacle": "safe_speed(speed, distance)",
+            "robotic_grasp": "can_grasp(is_holding, action_is_Grasp)"
+        }.get(specification.id, "verify_condition(" + ", ".join(specification.variables.keys()) + ")")
         return f"""Generate a Python verification function for this autonomous system requirement:
 
     REQUIREMENT: {requirement}
@@ -225,20 +244,23 @@ class NeuroSymbolicVerifier:
 
     CRITICAL: You MUST implement the logic DIRECTLY in the return statement.
     ABSOLUTELY NO intermediate variables like 'antecedent', 'consequent', 'condition_A', etc.
+    Function MUST be named: {func_name}
 
     Example for speed_obstacle:
-    CORRECT: return not (distance < 20) or (speed <= 10)
+    CORRECT: def safe_speed(speed, distance):\n    return not (distance < 20) or (speed <= 10)
     WRONG: 
-    antecedent = distance < 20
-    consequent = speed <= 10
-    return not antecedent or consequent
+    def safe_speed(speed, distance):
+        antecedent = distance < 20
+        consequent = speed <= 10
+        return not antecedent or consequent
 
     Example for robotic_grasp:
-    CORRECT: return not action_is_Grasp or not is_holding
+    CORRECT: def can_grasp(is_holding, action_is_Grasp):\n    return not (action_is_Grasp and is_holding)
     WRONG:
-    condition_A = action_is_Grasp
-    condition_B = not is_holding  
-    return not condition_A or condition_B
+    def can_grasp(is_holding, action_is_Grasp):
+        condition_A = action_is_Grasp
+        condition_B = not is_holding  
+        return not condition_A or condition_B
 
     Return ONLY the Python function code with NO intermediate variables:"""
 
@@ -249,6 +271,12 @@ class NeuroSymbolicVerifier:
         counterexample = verification.get('counterexample', {})
         
         counterexample_text = "\n".join([f"{k} = {v}" for k, v in counterexample.items()])
+        specification_id = previous_iteration['prompt_used'].split("for ")[-1].split(" ---")[0]
+        func_name = {
+            "drone_altitude": "check_altitude(altitude)",
+            "speed_obstacle": "safe_speed(speed, distance)",
+            "robotic_grasp": "can_grasp(is_holding, action_is_Grasp)"
+        }.get(specification_id, "verify_condition")
         
         return f"""The previous code failed formal verification. Here is the specific logical flaw:
 
@@ -267,7 +295,7 @@ class NeuroSymbolicVerifier:
     Generate corrected Python code that:
     1. Maintains the EXACT same requirement and safety property
     2. Fixes the logical error that allows the counterexample scenario
-    3. Uses the same function signature and variables
+    3. Uses the function signature: {func_name}
     4. Returns only boolean (True/False) verification
 
     Return ONLY the corrected Python function code:"""

@@ -1,18 +1,21 @@
 # example_usage.py
 from neuro_symbolic_verifier import NeuroSymbolicVerifier
 from llm_client import GeminiLLMClient
+from llm_client_llama import LlamaLLMClient
 from safety_specification import SafetySpecification
 import os
+import config
 
 def example_single_verification():
     """Example of verifying a single safety specification with Gemini"""
     
-    if not os.getenv("GEMINI_API_KEY"):
-        print("Please set GEMINI_API_KEY environment variable")
+    #select Active LLM Gemini or LlaMA
+    if config.ACTIVE_LLM.lower() == "gemini" and not os.getenv("GEMINI_API_KEY"):
+        print("Please set GEMINI_API_KEY environment variable for Gemini")
         return
     
 
-    llm_client = GeminiLLMClient()
+    llm_client = GeminiLLMClient() if config.ACTIVE_LLM.lower() == "gemini" else LlamaLLMClient()
     verifier = NeuroSymbolicVerifier(llm_client)
     
 
@@ -23,7 +26,7 @@ def example_single_verification():
         variables={"altitude": "real"}
     )
     
-    print("Testing single specification with Gemini...")
+    print(f"Testing single specification with {config.ACTIVE_LLM.capitalize()}...")
     result = verifier.run_generate_test_critique_refine(spec, max_iterations=3)
     
     print(f"\nResult: {'PASS' if result['verification_passed'] else 'FAIL'}")
@@ -35,11 +38,11 @@ def example_single_verification():
 def example_batch_verification():
     """Example of batch verification with multiple specifications"""
     
-    if not os.getenv("GEMINI_API_KEY"):
-        print("Please set GEMINI_API_KEY environment variable")
+    if config.ACTIVE_LLM.lower() == "gemini" and not os.getenv("GEMINI_API_KEY"):
+        print("Please set GEMINI_API_KEY environment variable for Gemini")
         return
     
-    llm_client = GeminiLLMClient()
+    llm_client = GeminiLLMClient() if config.ACTIVE_LLM.lower() == "gemini" else LlamaLLMClient()
     verifier = NeuroSymbolicVerifier(llm_client)
     
   
@@ -58,10 +61,10 @@ def example_batch_verification():
         )
     ]
     
-    print(" Batch verification with Gemini...")
+    print(f"Batch verification with {config.ACTIVE_LLM.capitalize()}...")
     for spec in specifications:
         result = verifier.run_generate_test_critique_refine(spec, max_iterations=2)
-        status = "passed" if result["verification_passed"] else "failed "
+        status = "passed" if result["verification_passed"] else "failed"
         print(f"{status} {spec.id}: {result['iterations']} iterations")
 
 if __name__ == "__main__":

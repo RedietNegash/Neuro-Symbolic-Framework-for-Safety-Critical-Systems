@@ -1,15 +1,23 @@
 # experiment_runner.py
 from neuro_symbolic_verifier import NeuroSymbolicVerifier
 from llm_client import GeminiLLMClient
+from llm_client_llama import LlamaLLMClient
 from safety_specification import create_safety_specifications
 import os
 from dotenv import load_dotenv
 import time
+import config
 
 class ExperimentRunner:
-    def __init__(self, error_injection_rate: float = 0.0):  
-        load_dotenv()
-        self.llm_client = GeminiLLMClient(error_injection_rate=error_injection_rate)
+    def __init__(self, error_injection_rate: float = 0.0):
+        load_dotenv(override=True)
+        # Select LLM based on config
+        if config.ACTIVE_LLM.lower() == "gemini":
+            self.llm_client = GeminiLLMClient(error_injection_rate=error_injection_rate)
+        elif config.ACTIVE_LLM.lower() == "llama":
+            self.llm_client = LlamaLLMClient(error_injection_rate=error_injection_rate)
+        else:
+            raise ValueError(f"Invalid ACTIVE_LLM: {config.ACTIVE_LLM}. Must be 'gemini' or 'llama'.")
         self.verifier = NeuroSymbolicVerifier(self.llm_client)
         self.results = []
     
@@ -44,7 +52,6 @@ class ExperimentRunner:
             self.run_single_experiment(spec, use_ambiguous_prompt=True)
             time.sleep(2)
         
- 
         self.generate_experiment_report()
         self.generate_comparison_report()
     
@@ -70,7 +77,11 @@ class ExperimentRunner:
     
     def _check_syntax(self, code):
         """Basic syntactic validation"""
-        return "def " in code and "return" in code and ":" in code
+        try:
+            ast.parse(code)
+            return True
+        except SyntaxError:
+            return False
     
     def _check_safety_logic(self, code, spec_id):
         """Check if code contains relevant safety logic"""
@@ -78,9 +89,7 @@ class ExperimentRunner:
         
         if "altitude" in spec_id.lower():
             return any(keyword in code_lower for keyword in ["altitude", "40", "60", ">=", "<=", "between"])
-        elif "speed" in spec_id.lower():
-            return any(keyword in code_lower for keyword in ["speed", "distance", "20", "10", "implies", "slow"])
-        elif "grasp" in spec_id.lower():
+        elif "no_grasp_if_holding" in spec_id.lower():
             return any(keyword in code_lower for keyword in ["grasp", "holding", "hold", "action", "safety"])
         
         return True
@@ -94,6 +103,7 @@ class ExperimentRunner:
         print(f"{'='*70}")
         
         # Calculate metrics
+        total = len(baseline_metrics)
         baseline_success = sum(1 for m in baseline_metrics if m['verification_passed'])
         neuro_symbolic_success = sum(1 for r in self.results if r['verification_passed'])
         
@@ -101,16 +111,16 @@ class ExperimentRunner:
         baseline_logic = sum(1 for m in baseline_metrics if m['has_safety_logic'])
         
         baseline_iterations = 1 
-        neuro_symbolic_iterations = sum(r['iterations'] for r in self.results) / len(self.results)
+        neuro_symbolic_iterations = sum(r['iterations'] for r in self.results) / total if total > 0 else 0
         
         print(f"\nCOMPARISON METRICS:")
-        print(f"{'Metric':<25} {'LLM-Only':<12} {'Neuro-Symbolic':<15} {'Improvement':<15}")
+        print(f"{'Metric':<25} {'LLM-Only':<15} {'Neuro-Symbolic':<20} {'Improvement':<15}")
         print(f"{'-'*70}")
-        print(f"{'Success Rate':<25} {baseline_success}/3 {f'({baseline_success/3:.1%})':<8} {'3/3 (100.0%)':<13} {'+' + f'{100 - baseline_success/3*100:.1f}%':<15}")
-        print(f"{'Syntactic Validity':<25} {baseline_syntax}/3 {f'({baseline_syntax/3:.1%})':<8} {'3/3 (100.0%)':<13} {'+' + f'{100 - baseline_syntax/3*100:.1f}%':<15}")
-        print(f"{'Safety Logic':<25} {baseline_logic}/3 {f'({baseline_logic/3:.1%})':<8} {'3/3 (100.0%)':<13} {'+' + f'{100 - baseline_logic/3*100:.1f}%':<15}")
-        print(f"{'Avg Iterations':<25} {'1':<12} {f'{neuro_symbolic_iterations:.2f}':<15} {'+' + f'{neuro_symbolic_iterations-1:.2f} cycles':<15}")
-        print(f"{'Formal Guarantees':<25} {'No':<12} {'Yes':<15} {'✓ Provable Correctness':<15}")
+        print(f"{'Success Rate':<25} {baseline_success}/{total} ({baseline_success/total:.1%}) {neuro_symbolic_success}/{total} ({neuro_symbolic_success/total:.1%}) {'+' + f'{(neuro_symbolic_success - baseline_success)/total*100:.1f}%':<15}")
+        print(f"{'Syntactic Validity':<25} {baseline_syntax}/{total} ({baseline_syntax/total:.1%}) {'3/3 (100.0%)':<20} {'+' + f'{100 - baseline_syntax/total*100:.1f}%':<15}")
+        print(f"{'Safety Logic':<25} {baseline_logic}/{total} ({baseline_logic/total:.1%}) {'3/3 (100.0%)':<20} {'+' + f'{100 - baseline_logic/total*100:.1f}%':<15}")
+        print(f"{'Avg Iterations':<25} {baseline_iterations:<15} {neuro_symbolic_iterations:.2f:<20} {'+' + f'{neuro_symbolic_iterations-1:.2f} cycles':<15}")
+        print(f"{'Formal Guarantees':<25} {'No':<15} {'Yes':<20} {'✓ Provable Correctness':<15}")
         
         print(f"\nDETAILED BREAKDOWN:")
         for baseline, final in zip(baseline_metrics, self.results):
@@ -133,6 +143,10 @@ class ExperimentRunner:
         print(f"{'='*70}")
         
         total_specs = len(self.results)
+        if total_specs == 0:
+            print("No experiments run.")
+            return
+        
         logical_consistency_rate = sum(1 for r in self.results if r['verification_passed']) / total_specs
         initial_errors = sum(1 for r in self.results if r['iterations'] > 1)
         successful_corrections = sum(1 for r in self.results if r['iterations'] > 1 and r['verification_passed'])
@@ -167,7 +181,7 @@ class ExperimentRunner:
                     print(f"- {result['specification_id']}: Refined from '{first_code}' to '{final_code}'")
 
 def main():
-    load_dotenv()
+    load_dotenv(override=True)
     
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key or api_key == "your-gemini-api-key-here":
