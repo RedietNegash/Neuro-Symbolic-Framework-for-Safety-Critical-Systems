@@ -4,8 +4,10 @@ from typing import Dict, List, Optional, Any
 from z3 import *
 
 class PythonToZ3Converter(ast.NodeVisitor):
+    
     def __init__(self, z3_vars: Dict):
         self.z3_vars = z3_vars
+        self.temporal_constraints = []
         self.assertions = []
         self.current_function = None
         self.function_return = None
@@ -184,3 +186,47 @@ class PythonToZ3Converter(ast.NodeVisitor):
                 arg = self.convert_to_z3_expr(node.args[0])
                 return Length(arg)
         raise ValueError(f"Unsupported function call: {func_name}")
+    
+
+    def _calculate_interference(self, task_i, hp_tasks: List, response_time: Real) -> Real:
+
+        interference = RealVal(0)
+
+        for task_j in hp_tasks:
+            preemptions = response_time / RealVal(task_j.period)
+            Jobs_j = Int(f"Jobs_{task_i.name}_{task_j.name}")
+            self.temporal_constraints.append(Jobs_j >= preemptions)
+            self.temporal_constraints.append(Jobs_j < (preemptions + RealVal(1)))
+            interference = interference + (ToReal(Jobs_j) * RealVal(task_j.wcet))
+        return interference
+
+    def encode_rta_constraints(self, task_set: List) -> List[Any]:
+        if not task_set:
+            return []
+        print("DEBUG_CONVERTER: Encoding Real-Time Schedulability Constraints (RTA)")
+
+        sorted_tasks = sorted(task_set, key=lambda t: t.priority)
+
+        for i, task_i in enumerate(sorted_tasks):
+            Ri = Real(f"R_{task_i.name}")
+            self.z3_vars = Ri
+
+            Ci = RealVal(task_i.wcet)
+            Jitter_i = RealVal(task_i.jitter)
+            Bi = RealVal(0)
+
+            hp_tasks = sorted_tasks[:i]
+
+            Interference_i = self._calculate_interference(task_i, hp_tasks, Ri)
+
+            rta_fixed_point_assertion = (Ri == Ci + Bi + Interference_i)
+            self.temporal_constraints.append(rta_fixed_point_assertion)
+
+            deadline_assertion = (Ri + Jitter_i <= RealVal(task_i.deadline))
+            self.temporal_constraints.append(deadline_assertion)
+            
+            print(f"DEBUG_CONVERTER: Added RTA for {task_i.name}: {rta_fixed_point_assertion}")
+            print(f"DEBUG_CONVERTER: Added Deadline Check for {task_i.name}: {deadline_assertion}")
+        schedulability_holds = And(self.temporal_constraints)
+        self.z3_vars["schedulability_holds"] = schedulability_holds
+        return [schedulability_holds]
