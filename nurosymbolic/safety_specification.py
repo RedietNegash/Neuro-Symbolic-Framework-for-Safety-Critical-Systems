@@ -10,6 +10,8 @@ class SafetySpecification:
         self.formal_property = formal_property
         self.variables = variables
         self.z3_vars = self._create_z3_variables()
+        self.task_set = task_set 
+        self.is_temporal = task_set is not None
     
     def _create_z3_variables(self) -> Dict:
         z3_vars = {}
@@ -28,6 +30,15 @@ class SafetySpecification:
 
 def create_safety_specifications():
     """Create specifications designed to trigger common LLM logical errors"""
+    uav_control_tasks =
+    
+    temporal_spec = SafetySpecification(
+        id="uav_schedulability_rta",
+        requirement="The UAV control loop tasks must be schedulable and meet all hard deadlines.",
+        formal_property="schedulability_holds", # A flag used in the verifier
+        variables={}, 
+        task_set=uav_control_tasks
+    )
     return [
         SafetySpecification(
             id="drone_altitude_inclusive",
@@ -63,5 +74,14 @@ def create_safety_specifications():
             ambiguous_prompt="The drone should land when battery is low.", 
             formal_property="Implies(voltage < 11.1, emergency_land == True)",
             variables={"voltage": "real", "emergency_land": "bool"}
-        )
+        ), 
+        temporal_spec
     ]
+class TaskSpecification:
+    def __init__(self, name: str, priority: int, period: float, wcet: float, deadline: float, jitter: float = 0.0):
+        self.name = name
+        self.priority = priority
+        self.period = period
+        self.wcet = wcet
+        self.deadline = deadline
+        self.jitter = jitter 
