@@ -6,7 +6,7 @@ import random
 
 class SafetySpecification:
     def __init__(self, id: str, requirement: str, formal_property: str, variables: Dict, 
-                 ambiguous_prompt: str = None, correct_python_code: str = None):
+                 ambiguous_prompt: str = None, correct_python_code: str = None, task_set=None):
         self.id = id
         self.requirement = requirement
         self.ambiguous_requirement = ambiguous_prompt or requirement 

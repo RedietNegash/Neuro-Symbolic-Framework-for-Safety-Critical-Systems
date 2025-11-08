@@ -1,8 +1,10 @@
 # neuro_symbolic_verifier.py
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from z3 import *
 import time
 from symbolic_bridge import ASTToZ3Translator
+from safety_specification import SafetySpecification
+
 
 class FormalVerifier:
     """
@@ -271,3 +273,72 @@ class NeuroSymbolicVerifier:
     4. Returns only boolean (True/False) verification
 
     Return ONLY the corrected Python function code:"""
+
+    def verify_code(
+        self, code_string: str, specification) -> Tuple[bool, Optional[Dict[str, str]]]:
+        """
+        Unified verification logic for both functional and temporal properties.
+        Implements the core dual-check mechanism (Section 3.5).
+        """
+        try:
+            solver = Solver()
+
+            if getattr(specification, "is_temporal", False):
+                converter = PythonToZ3Converter(specification.z3_vars)
+                converter.encode_rta_constraints(specification.task_set)
+
+                for assertion in converter.temporal_constraints:
+                    solver.add(assertion)
+
+                result = solver.check()
+
+                if result == sat:
+                    return True, None
+                else:
+                    return False, {
+                        "Temporal_Error": "Schedulability proof failed (UNSAT). At least one hard deadline is missed."
+                    }
+
+            else:
+                code_safety_var = Bool('code_safety_judgment')
+                extended_z3_vars = specification.z3_vars.copy()
+                extended_z3_vars['function_return'] = code_safety_var
+
+                converter = PythonToZ3Converter(extended_z3_vars)
+                converter.visit(tree)
+
+                for assertion in getattr(converter, "assertions", []):
+                    solver.add(assertion)
+
+                property_expr = eval(specification.formal_property, {}, extended_z3_vars)
+                verification_condition = (code_safety_var != property_expr)
+                solver.add(verification_condition)
+
+                result = solver.check()
+
+                if result == sat:
+                    model = solver.model()
+                    counterexample = {}
+                    for decl in model.decls():
+                        if decl.name() not in ['function_return', '__code_output__']:
+                            counterexample[decl.name()] = str(model[decl])
+                    return False, counterexample
+                else:
+                    return True, None
+
+        except Exception as e:
+            return False, {"error": str(e)}
+   
+    def generate_refinement_prompt(self, specification: SafetySpecification, 
+                                code: str, counterexample: Dict) -> str:
+        if "Temporal_Error" in counterexample:
+            return f"""The previous scheduling logic failed to ensure all tasks meet their deadlines.
+            Please review the timing constraints and ensure all tasks are properly scheduled."""
+        
+    def print_statistics(self):
+        print("\n=== Verification Statistics ===")
+        for key, value in self.metrics.items():
+            if isinstance(value, float):
+                print(f"{key}: {value:.3f}")
+            else:
+                print(f"{key}: {value}")
