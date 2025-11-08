@@ -139,8 +139,18 @@ def create_safety_specifications():
         variables={}, 
         task_set=uav_control_tasks
     )
-
-    """Create specifications following exact document examples from Section 2.1 table"""
+    fault_spec = SafetySpecification(
+        id="fault_tolerance_dual_sensor",
+        requirement="The system must implement fault tolerance: if Sensor_A is faulty, the output must switch to Sensor_B.",
+        ambiguous_prompt="Implement redundancy for a critical sensor input.",
+        formal_property="Implies(Sensor_A_is_faulty == True, Safe_Output == Sensor_B)",
+        variables={
+            "Sensor_A": "real",
+            "Sensor_B": "real",
+            "Sensor_A_is_faulty": "bool",
+            "Safe_Output": "real" 
+        }
+    )
 
     return [
             SafetySpecification(
