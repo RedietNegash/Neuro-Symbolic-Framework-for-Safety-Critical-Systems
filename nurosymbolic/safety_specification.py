@@ -179,7 +179,9 @@ def create_safety_specifications():
                 correct_python_code="""def can_grasp(is_holding, action_is_Grasp):
                 return not (action_is_Grasp and is_holding)"""
             ),
-        temporal_spec
+        temporal_spec,
+        fault_spec
+
     
     ]
 

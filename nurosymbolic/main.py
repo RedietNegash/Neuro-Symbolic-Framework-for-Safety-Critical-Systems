@@ -38,11 +38,25 @@ def main():
         specifications = create_safety_specifications()
         
 
-        results = []
-        for spec in specifications[:2]:  
-            result = verifier.run_generate_test_critique_refine(spec, max_iterations=3)
-            results.append(result)
+        # results = []
+        # for spec in specifications[:2]:  
+        #     result = verifier.run_generate_test_critique_refine(spec, max_iterations=3)
+        #     results.append(result)
         
+       
+
+        # Only run the fault tolerance specification
+        results = []
+
+        # Run only the fault-tolerance test
+        for spec in specifications:
+            if spec.id == "fault_tolerance_dual_sensor":
+                print(f"\n=== Running test for {spec.id} ===")
+                result = verifier.run_generate_test_critique_refine(spec, max_iterations=3)
+                results.append(result)
+                break
+
+
 
         print("\n" + "="*60)
         print("VERIFICATION RESULTS SUMMARY")

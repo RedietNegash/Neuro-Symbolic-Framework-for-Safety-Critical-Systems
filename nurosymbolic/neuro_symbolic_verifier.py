@@ -203,6 +203,7 @@ class NeuroSymbolicVerifier:
                     print(f"Counterexample: {verification_result['counterexample']}")
         
         final_verification_passed = iterations[-1]['verification_result']['verified']
+        final_counterexample = iterations[-1]['verification_result'].get('counterexample')
         
         return {
             'specification_id': specification.id,
@@ -210,7 +211,9 @@ class NeuroSymbolicVerifier:
             'verification_passed': final_verification_passed,
             'iteration_details': iterations,
             'final_code': iterations[-1]['generated_code'],
-            'metrics': self.metrics.copy()
+            'final_counterexample': final_counterexample,
+            'metrics': self.metrics.copy(),
+            
         }
     
 
