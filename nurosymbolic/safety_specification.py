@@ -151,6 +151,27 @@ def create_safety_specifications():
             "Safe_Output": "real" 
         }
     )
+    fusion_spec = SafetySpecification(
+        id="sensor_fusion_outlier_rejection",
+        requirement="The final validated speed must align with the GPS sensor, unless the IMU reading is a severe outlier (>= 50 m/s), in which case the speed must be capped at a safe limit (30 m/s).",
+        ambiguous_prompt="Perform robust speed validation using GPS and IMU data.",
+        formal_property="Implies(speed_imu < 50, Abs(validated_speed - speed_gps) <= 5) OR Implies(speed_imu >= 50, validated_speed <= 30)",
+        variables={
+            "speed_gps": "real",
+            "speed_imu": "real",
+            "validated_speed": "real"
+        }
+    )
+    thermal_spec = SafetySpecification(
+        id="thermal_throttling_safeguard",
+        requirement="If the CPU temperature exceeds 85 degrees Celsius, the system must engage thermal throttling, capping maximum motor power to 50% to prevent component damage.",
+        ambiguous_prompt="Implement overheat protection for the drone motors.",
+        formal_property="Implies(cpu_temp > 85, max_motor_power <= 50)",
+        variables={
+            "cpu_temp": "real",
+            "max_motor_power": "real"
+        }
+    )
 
     return [
             SafetySpecification(
@@ -180,7 +201,9 @@ def create_safety_specifications():
                 return not (action_is_Grasp and is_holding)"""
             ),
         temporal_spec,
-        fault_spec
+        fault_spec,
+        fusion_spec,
+        thermal_spec
 
     
     ]
