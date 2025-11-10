@@ -256,7 +256,7 @@ def create_safety_specifications():
         formal_property="Implies(distance < 20, speed <= 10)",
         variables={"speed": "real", "distance": "real"},
         correct_python_code="def safe_speed(speed, distance):\n    if distance < 20:\n        return speed <= 10\n    return True"
-    )
+        ),
     specifications.append(speed_spec)  
 
     robotic_spec = SafetySpecification(
