@@ -125,10 +125,10 @@ def create_safety_specifications():
     specifications.append(wcet_spec) 
 
     # 2. FAULT TOLERANCE AND REDUNDANCY - FIXED STRUCTURE
+
     sensor_spec = SafetySpecification(
         id="sensor_redundancy_failover",
         requirement="Primary IMU failure must trigger automatic failover to redundant IMU within 5ms with validated sensor consistency.",
-        # FIXED: Added Sensor_Consistency to the formal property
         formal_property="Implies(And(Primary_IMU_Fault, Not(Redundant_IMU_Fault)), And(Failover_Time <= 0.005, Sensor_Consistency))",
         variables={
             "Primary_IMU_Fault": "bool",
