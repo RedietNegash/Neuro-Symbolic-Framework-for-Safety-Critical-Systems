@@ -245,7 +245,6 @@ def create_safety_specifications():
         ambiguous_prompt="The drone must maintain altitude between 40 and 60 meters.",
         formal_property="And(altitude >= 40, altitude <= 60)",
         variables={"altitude": "real"},
-        correct_python_code="def check_altitude(alt):\n    return 40 <= alt <= 60"
     )
     specifications.append(alt_spec)  
 
