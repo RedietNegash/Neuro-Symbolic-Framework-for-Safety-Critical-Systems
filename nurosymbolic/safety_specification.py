@@ -93,8 +93,7 @@ class SafetySpecification:
 def create_safety_specifications():
     """Create specifications with FIXED variable definitions"""
     
-    specifications = []  # ADD THIS MISSING LINE
-    
+    specifications = []
     # 1. TIMING DETERMINISM AND REAL-TIME SCHEDULING - FIXED
     wcet_spec = SafetySpecification(
         id="wcet_validation_sil3",
