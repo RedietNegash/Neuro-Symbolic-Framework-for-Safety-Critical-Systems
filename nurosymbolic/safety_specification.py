@@ -188,19 +188,19 @@ def create_safety_specifications():
     comms_spec = SafetySpecification(
         id="critical_command_latency",
         requirement="Emergency stop commands must reach actuators within 100ms with 99.9% reliability under maximum network load.",
-        formal_property="Implies(Command_Type == 'EMERGENCY_STOP', And(Latency <= 0.1, Reliability >= 0.999))",
+        formal_property="Implies(Is_Emergency_Stop, And(Latency <= 0.1, Reliability >= 0.999))",
         variables={
-            "Command_Type": "string",
+            "Is_Emergency_Stop": "bool", 
             "Latency": "real",
             "Reliability": "real"
         },
-        correct_python_code="""def validate_emergency_latency(command_type, latency, reliability):
-    \"\"\"Validate emergency command latency and reliability\"\"\"
-    if command_type == 'EMERGENCY_STOP':
-        return latency <= 0.1 and reliability >= 0.999
-    return True"""
+        correct_python_code="""def validate_emergency_latency(is_emergency_stop, latency, reliability):
+        \"\"\"Validate emergency command latency and reliability\"\"\"
+        if is_emergency_stop:
+            return latency <= 0.1 and reliability >= 0.999
+        return True"""
     )
-    specifications.append(comms_spec)  
+    specifications.append(comms_spec)
 
     # 5. POWER AND THERMAL MANAGEMENT
     battery_spec = SafetySpecification(
