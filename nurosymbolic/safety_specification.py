@@ -123,26 +123,27 @@ def create_safety_specifications():
     return confidence_ok and wcet_1_ok and wcet_2_ok and wcet_3_ok"""
     )
 
-    specifications.append(wcet_spec)  # ADD THIS LINE
+    specifications.append(wcet_spec) 
 
     # 2. FAULT TOLERANCE AND REDUNDANCY - FIXED STRUCTURE
     sensor_spec = SafetySpecification(
         id="sensor_redundancy_failover",
         requirement="Primary IMU failure must trigger automatic failover to redundant IMU within 5ms with validated sensor consistency.",
-        formal_property="Implies(And(Primary_IMU_Fault, Not(Redundant_IMU_Fault)), Failover_Time <= 0.005)",
+        # FIXED: Added Sensor_Consistency to the formal property
+        formal_property="Implies(And(Primary_IMU_Fault, Not(Redundant_IMU_Fault)), And(Failover_Time <= 0.005, Sensor_Consistency))",
         variables={
             "Primary_IMU_Fault": "bool",
             "Redundant_IMU_Fault": "bool", 
             "Failover_Time": "real",
             "Sensor_Consistency": "bool"
         },
-        correct_python_code="""def sensor_failover_logic(primary_fault, redundant_fault, failover_time):
-    \"\"\"Verify sensor failover meets timing requirements\"\"\"
-    if primary_fault and not redundant_fault:
-        return failover_time <= 0.005
-    return True"""
+        correct_python_code="""def sensor_failover_logic(primary_fault, redundant_fault, failover_time, sensor_consistency):
+        \"\"\"Verify sensor failover meets timing and consistency requirements\"\"\"
+        if primary_fault and not redundant_fault:
+            return failover_time <= 0.005 and sensor_consistency
+        return True"""
     )
-    specifications.append(sensor_spec)  # ADD THIS LINE
+    specifications.append(sensor_spec)  
 
     processor_spec = SafetySpecification(
         id="processor_redundancy_do254",
@@ -161,7 +162,7 @@ def create_safety_specifications():
         return redundant_active and failover_time <= 0.05 and state_synced
     return True"""
     )
-    specifications.append(processor_spec)  # ADD THIS LINE
+    specifications.append(processor_spec)  
 
     # 3. SENSOR FUSION INTEGRITY
     fusion_spec = SafetySpecification(
@@ -181,7 +182,7 @@ def create_safety_specifications():
             abs(imu - fused) <= tolerance and 
             abs(vision - fused) <= tolerance)"""
     )
-    specifications.append(fusion_spec)  # ADD THIS LINE
+    specifications.append(fusion_spec)  
 
     # 4. COMMUNICATION RELIABILITY AND SECURITY
     comms_spec = SafetySpecification(
@@ -199,7 +200,7 @@ def create_safety_specifications():
         return latency <= 0.1 and reliability >= 0.999
     return True"""
     )
-    specifications.append(comms_spec)  # ADD THIS LINE
+    specifications.append(comms_spec)  
 
     # 5. POWER AND THERMAL MANAGEMENT
     battery_spec = SafetySpecification(
@@ -217,7 +218,7 @@ def create_safety_specifications():
         return rth_initiated and power_saving
     return True"""
     )
-    specifications.append(battery_spec)  # ADD THIS LINE
+    specifications.append(battery_spec)  
 
     thermal_spec = SafetySpecification(
         id="thermal_overload_protection",
@@ -233,7 +234,7 @@ def create_safety_specifications():
         return thermal_throttling
     return True"""
     )
-    specifications.append(thermal_spec)  # ADD THIS LINE
+    specifications.append(thermal_spec) 
 
     # 6. BASIC SAFETY SCENARIOS (from original paper)
     alt_spec = SafetySpecification(
@@ -244,7 +245,7 @@ def create_safety_specifications():
         variables={"altitude": "real"},
         correct_python_code="def check_altitude(alt):\n    return 40 <= alt <= 60"
     )
-    specifications.append(alt_spec)  # ADD THIS LINE
+    specifications.append(alt_spec)  
 
     speed_spec = SafetySpecification(
         id="speed_obstacle", 
@@ -254,7 +255,7 @@ def create_safety_specifications():
         variables={"speed": "real", "distance": "real"},
         correct_python_code="def safe_speed(speed, distance):\n    if distance < 20:\n        return speed <= 10\n    return True"
     )
-    specifications.append(speed_spec)  # ADD THIS LINE
+    specifications.append(speed_spec)  
 
     robotic_spec = SafetySpecification(
         id="robotic_grasp",
@@ -265,8 +266,7 @@ def create_safety_specifications():
         correct_python_code="""def can_grasp(is_holding, action_is_Grasp):
     return not (action_is_Grasp and is_holding)"""
     )
-    specifications.append(robotic_spec)  # ADD THIS LINE
+    specifications.append(robotic_spec)  
 
     return specifications
 
-# REMOVE THE DUPLICATE FUNCTION AT THE BOTTOM
