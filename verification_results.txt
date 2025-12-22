@@ -1,0 +1,36 @@
+Neuro-Symbolic Framework Verification Results
+==================================================
+LLM: Gemma
+Model: gemma2:9b
+Date: 2025-12-08 11:11:47
+
+robotic_arm_angle: FAIL
+  Iterations: 5
+  Code: def check_angle(angle):
+  return 10 <= angle <= 50
+  Counterexample: {'angle': '51'}
+
+manufacturing_speed_limit: PASS
+  Iterations: 1
+  Code: def check_safety(speed, distance_to_human):
+  return speed <= 2 if distance_to_human <= 5 else True
+
+robotic_grasp: PASS
+  Iterations: 1
+  Code: def safety_check(is_holding, action):
+  return action != "Grasp" or not is_holding
+
+arm_extension_limit: FAIL
+  Iterations: 5
+  Code: def check_extension(extension):
+  return 0 <= extension <= 1
+  Counterexample: {'extension': '2'}
+
+rotation_speed_limit: PASS
+  Iterations: 2
+  Code: def check_robot_safety(rotation_speed, distance_to_obstacle):
+  return rotation_speed <= 5 if distance_to_obstacle > 0.5 else False
+
+
+Success Rate: 60.0%
+Average Iterations: 2.8
