@@ -6,6 +6,7 @@ from src.models.llm_ensemble import LLMEnsemble
 from src.core.experimental_analyzer import ExperimentalAnalyzer
 from src.verification.safety_specification import SafetySpecification
 from src.verification.python_to_z3_converter import PythonToZ3Converter
+from src.verification.loop_invariant_synthesizer import LoopInvariantSynthesizer
 from z3 import *
 
 class NeuroSymbolicVerifier:
@@ -14,6 +15,7 @@ class NeuroSymbolicVerifier:
     def __init__(self):
         self.ensemble = LLMEnsemble()
         self.analyzer = ExperimentalAnalyzer()
+        self.invariant_synthesizer = LoopInvariantSynthesizer()
         self.verification_stats = {
             "total_verifications": 0,
             "successful_verifications": 0,
@@ -102,6 +104,12 @@ STRICT GUIDELINES FOR FIX:
             
             for assertion in converter.assertions:
                 solver.add(assertion)
+            
+            # [Step D1-D4] Loop Invariant Synthesis (Lightweight)
+            # Only runs if loops are detected, adds strengthening constraints
+            invariants = self.invariant_synthesizer.synthesize(code_string, specification)
+            for inv in invariants:
+                solver.add(inv)
             
             # Get property expression
             property_expr = eval(specification.formal_property, globals(), specification.z3_vars)
