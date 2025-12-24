@@ -107,7 +107,10 @@ STRICT GUIDELINES FOR FIX:
             
             # [Step D1-D4] Loop Invariant Synthesis (Lightweight)
             # Only runs if loops are detected, adds strengthening constraints
-            invariants = self.invariant_synthesizer.synthesize(code_string, specification)
+            # We pass a fast LLM client (e.g. Gemini) if available for D3 Naturalization
+            # Since strict time limits apply, we prioritize using 'gemini' (Flash) if active, else None.
+            fast_client = self.ensemble.clients.get('gemini') 
+            invariants = self.invariant_synthesizer.synthesize(code_string, specification, llm_client=fast_client)
             for inv in invariants:
                 solver.add(inv)
             

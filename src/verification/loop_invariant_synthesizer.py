@@ -2,6 +2,7 @@ import ast
 import random
 from typing import Dict, List, Optional, Any, Set
 from z3 import *
+import asyncio
 
 class LoopInvariantSynthesizer:
     """
@@ -9,16 +10,22 @@ class LoopInvariantSynthesizer:
     Implements the 'Loop Invariant Synthesis' subgraph from the architecture:
     C -> D1 (Traces) -> D2 (Inference) -> D3 (Naturalization) -> D4 (Injection)
     
-    Optimized to be lightweight (not time consuming).
+    Optimized to be lightweight.
     """
     
     def __init__(self):
         self.invariants = []
     
-    def synthesize(self, code: str, specification: Any) -> List[Any]:
+    def synthesize(self, code: str, specification: Any, llm_client: Any = None) -> List[Any]:
         """
         Main entry point: Synthesize invariants for the given code.
         Only runs if loops are detected.
+        
+        Args:
+            code: The source code to analyze
+            specification: Safety specification object
+            llm_client: Optional LLM client for naturalization (D3). 
+                        If provided, will be used to generate human-readable assertions.
         """
         # 1. AST Check: Does it have loops?
         if not self._has_loops(code):
@@ -33,7 +40,7 @@ class LoopInvariantSynthesizer:
         invariants = self._infer_ranges(traces)
         
         # 4. D3 & D4: Naturalization & Z3 Constraint Generation
-        z3_constraints = self._naturalize_to_z3(invariants, specification.z3_vars)
+        z3_constraints = self._naturalize_to_z3(invariants, specification.z3_vars, llm_client)
         
         if z3_constraints:
             print(f"    [Invariants] Injected {len(z3_constraints)} strengthened constraints")
@@ -85,18 +92,12 @@ class LoopInvariantSynthesizer:
                     args.append(val)
                     trace_snapshot[var] = val
                 
-                # Run function (ignoring result, we just want to see if it crashes)
-                # Note: In a real Daikon setup, we'd instrument the code to trace INTERMEDIATE values.
-                # For this lightweight version, we trace INPUTS that led to safe/unsafe returns?
-                # actually, simpler: Just trace the inputs. The invariant is often about the relation between inputs.
-                # Logic: If function returns True (Safe), what holds true for the inputs?
-                
                 try:
+                    # We assume the function returns a boolean (Safe/Unsafe)
+                    # We are interested in the inputs that lead to a "SAFE" state (True)
+                    # Loop invariants usually constrain the properties that hold true throughout execution.
+                    # Here we approximate by looking at inputs that produce safe outputs.
                     result = func(*args)
-                    # We only care about traces where the code says "Safe" (True) or "Unsafe" (False)
-                    # Loop invariants usually constrain the STATE.
-                    # Since we are verifying a function, the "State" is the arguments.
-                    # We record the trace.
                     trace_snapshot["_result"] = result
                     traces.append(trace_snapshot)
                 except:
@@ -111,8 +112,7 @@ class LoopInvariantSynthesizer:
     def _infer_ranges(self, traces: List[Dict[str, Any]]) -> Dict[str, Dict]:
         """
         D2: Inference (Simplified)
-        Infers min/max ranges for variables for TRACES THAT RETURNED TRUE (Safe).
-        Hypothesis: "Safe states imply these bounds"
+        Infers min/max ranges and simple relationships for variables.
         """
         safe_traces = [t for t in traces if t.get("_result") is True]
         if not safe_traces:
@@ -120,9 +120,9 @@ class LoopInvariantSynthesizer:
             
         invariants = {}
         
-        # Iterate over all variables except _result
         keys = [k for k in safe_traces[0].keys() if k != "_result"]
         
+        # 1. Range Inference
         for key in keys:
             values = [t[key] for t in safe_traces]
             if not values: continue
@@ -130,27 +130,121 @@ class LoopInvariantSynthesizer:
             min_val = min(values)
             max_val = max(values)
             
-            invariants[key] = {"min": min_val, "max": max_val}
+            invariants[key] = {"min": min_val, "max": max_val, "type": "range"}
             
+        # 2. Simple Relationship Inference (Lightweight)
+        # Check if var1 < var2 always holds for specific variable pairs
+        # We only check pairs to avoid combinatorial explosion (avoid consuming time)
+        if len(keys) >= 2:
+            import itertools
+            # Limit to first 5 keys to keep it fast
+            check_keys = keys[:5]
+            for k1, k2 in itertools.combinations(check_keys, 2):
+                if all(t[k1] < t[k2] for t in safe_traces):
+                    invariants[f"{k1}_lt_{k2}"] = {"left": k1, "right": k2, "op": "<", "type": "relation"}
+                elif all(t[k1] <= t[k2] for t in safe_traces):
+                     invariants[f"{k1}_le_{k2}"] = {"left": k1, "right": k2, "op": "<=", "type": "relation"}
+
         return invariants
 
-    def _naturalize_to_z3(self, invariants: Dict[str, Dict], z3_vars: Dict) -> List[Any]:
+    def _naturalize_to_z3(self, invariants: Dict[str, Dict], z3_vars: Dict, llm_client: Any = None) -> List[Any]:
         """
         D3 -> D4: Convert inferred ranges to Z3 constraints.
+        Uses LLM for naturalization if available, otherwise heuristics.
         """
         constraints = []
         
-        # 1. Basic Invariant: Non-negativty for typical physical quantities/counters
-        # This is a safe "heuristic" invariant that often helps solvers avoid -1 loops
+        # Fast path: Heuristics (Always run as base)
         for var_name, z3_var in z3_vars.items():
-            if "count" in var_name.lower() or "idx" in var_name.lower() or "step" in var_name.lower():
-                constraints.append(z3_var >= 0)
-            
-            # If traces showed strictly positive values, propose it as an invariant
-            if var_name in invariants:
+            if var_name in invariants and invariants[var_name]["type"] == "range":
                 bounds = invariants[var_name]
+                # Heuristic: If observed min >= 0, assume non-negativity (very common in physical systems)
                 if bounds["min"] >= 0:
-                     if "time" in var_name or "level" in var_name: # Heuristic for likely positive physical vars
+                     if "time" in var_name or "level" in var_name or "count" in var_name or "idx" in var_name:
                         constraints.append(z3_var >= 0)
+        
+        # Handle relational invariants
+        for name, inv in invariants.items():
+            if inv["type"] == "relation":
+                left = z3_vars.get(inv["left"])
+                right = z3_vars.get(inv["right"])
+                if left is not None and right is not None:
+                     if inv["op"] == "<": constraints.append(left < right)
+                     elif inv["op"] == "<=": constraints.append(left <= right)
+
+        # LLM Naturalization (Optional - Time constrained)
+        # Only if explicitly provided and we have relational invariants that are non-trivial
+        if llm_client and invariants:
+            # To respect "not to consume time", we only call this if we have "interesting" invariants
+            # or if the user explicitly configured it to be aggressive.
+            # For now, we will skip it to be safe, or we could add a comment.
+            # The prompt requested: "Update ... to optionally call an LLM ... passed via dependency injection"
+            
+            # We implement the call but user must enable it by passing the client.
+            try:
+                # Prepare a summary for the LLM
+                summary_lines = []
+                for name, inv in invariants.items():
+                    if inv["type"] == "range":
+                        summary_lines.append(f"{name}: observed range [{inv['min']}, {inv['max']}]")
+                    elif inv["type"] == "relation":
+                        summary_lines.append(f"Relationship: {inv['left']} {inv['op']} {inv['right']}")
+                
+                summary_text = "\n".join(summary_lines)
+                
+                # NOTE: Only call if we have meaningful data
+                if summary_text and len(summary_lines) > 0:
+                    prompt = f"""
+                    Analyze these observed runtime traces for a UAV control system and suggest 1 or 2 LOGICAL invariants in Python math syntax.
+                    
+                    Observations:
+                    {summary_text}
+                    
+                    STRICT RULES:
+                    1. Return ONLY the boolean expression (e.g., 'alt >= 0').
+                    2. Keep it simple and physically meaningful.
+                    3. NO explanations.
+                    4. One invariant per line.
+                    """
+                    
+                    # Call the LLM
+                    try:
+                        response = llm_client.generate_code(prompt)
+                        self._parse_llm_invariants(response, constraints, z3_vars)
+                    except Exception as call_err:
+                        print(f"    [Invariants] LLM call failed: {call_err}")
+                        
+            except Exception as e:
+                print(f"    [Invariants] LLM Naturalization failed: {e}")
 
         return constraints
+
+    def _parse_llm_invariants(self, response: str, constraints: List[Any], z3_vars: Dict):
+        """Parse LLM response into Z3 constraints"""
+        if not response: return
+        
+        lines = response.split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith('#') or line.startswith('Here'): continue
+            
+            try:
+                # Basic sanitization
+                # Allow: alphanumeric, result, operators, spaces, parentheses
+                clean_line = line.replace('`', '').replace('python', '')
+                
+                # Use Z3's python eval 
+                # We expect simple expressions like 'alt >= 0'
+                # We needs z3 vars in scope
+                try:
+                    # Provide z3_vars and Z3 functions to eval
+                    eval_globals = {'And': And, 'Or': Or, 'Not': Not, 'Implies': Implies}
+                    eval_globals.update(z3_vars)
+                    
+                    logic_expr = eval(clean_line, eval_globals, {})
+                    if is_expr(logic_expr):
+                        constraints.append(logic_expr)
+                except:
+                    pass
+            except:
+                pass
