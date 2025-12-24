@@ -1,9 +1,9 @@
-from neuro_symbolic_verifier import NeuroSymbolicVerifier
-from llm_client import GeminiLLMClient
-from llm_client_llama import LlamaLLMClient
-from safety_specification import SafetySpecification
+from src.verification.neuro_symbolic_verifier import NeuroSymbolicVerifier
+from src.models.llm_client import GeminiLLMClient
+from src.models.llm_client_llama import LlamaLLMClient
+from src.verification.safety_specification import SafetySpecification
 import os
-import config
+from src.core import config
 
 def example_single_verification():
     """Example of verifying a single safety specification with selected LLM"""

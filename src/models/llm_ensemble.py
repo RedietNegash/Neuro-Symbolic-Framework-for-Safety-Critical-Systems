@@ -1,33 +1,62 @@
+# src/models/llm_ensemble.py
 import asyncio
 from typing import List, Dict, Any, Optional, Tuple
-from llm_client import GeminiLLMClient  # ADDED
-from llm_client_llama import LlamaLLMClient
-from llm_client_deepseek import DeepSeekLLMClient
 import ast
 import re
+
+# Import from current module
+from .llm_client import GeminiLLMClient
+from .llm_client_llama import LlamaLLMClient
+from .llm_client_deepseek import DeepSeekLLMClient
+from ..core import config
 
 class LLMEnsemble:
     """Orchestrates an ensemble of LLMs for verified code synthesis with tracking"""
     
     def __init__(self, include_gemini: bool = True):
-        self.clients = {
-            "llama": LlamaLLMClient(),
-            "deepseek": DeepSeekLLMClient()
-        }
+        self.clients = {}
         
-        # Add Gemini if available
-        if include_gemini:
-            try:
-                self.clients["gemini"] = GeminiLLMClient()
-                print("✅ Gemini added to ensemble")
-            except Exception as e:
-                print(f"⚠️ Could not add Gemini to ensemble: {e}")
-                print("Continuing with Llama and DeepSeek only")
+        # Initialize models with error handling
+        try:
+            self.clients["llama"] = LlamaLLMClient(
+                model=config.LLAMA_MODEL, 
+                host=config.LLAMA_HOST
+            )
+            print("[OK] Llama client initialized")
+        except Exception as e:
+            print(f"[Warning] Failed to initialize Llama: {e}")
         
+        try:
+            # Use the correct DeepSeek model name
+            deepseek_model = config.DEEPSEEK_MODEL
+            print(f"[Info] Using DeepSeek model: {deepseek_model}")
+            self.clients["deepseek"] = DeepSeekLLMClient(
+                model=deepseek_model, 
+                host=config.DEEPSEEK_HOST
+            )
+            print("[OK] DeepSeek client initialized")
+        except Exception as e:
+            print(f"[Warning] Failed to initialize DeepSeek: {e}")
+        
+        # Add Gemini if available (Commented out to save time)
+        # if include_gemini and config.GEMINI_API_KEY:
+        #     try:
+        #         self.clients["gemini"] = GeminiLLMClient(
+        #             model=config.GEMINI_MODEL, 
+        #             api_key=config.GEMINI_API_KEY
+        #         )
+        #         print("[OK] Gemini added to ensemble")
+        #     except Exception as e:
+        #         print(f"[Warning] Could not add Gemini to ensemble: {e}")
+        #         print("Continuing with available models")
+        
+        if not self.clients:
+            raise RuntimeError("No LLM clients could be initialized")
+            
         self.logs = []
         self.last_selected_model = None
         self.model_selection_history = []
-        print(f"Ensemble initialized with {len(self.clients)} models: {', '.join(self.clients.keys())}")
+        print(f"[Ready] Ensemble initialized with {len(self.clients)} models: {', '.join(self.clients.keys())}")
     
     async def generate_ensemble(self, prompt: str) -> Dict[str, str]:
         """Run all LLMs in parallel and return their outputs"""
@@ -45,45 +74,64 @@ class LLMEnsemble:
         responses = await asyncio.gather(*tasks)
         return dict(responses)
 
-    def arbitrate(self, candidates: Dict[str, str]) -> Optional[str]:
-        """Select the best candidate based on simplicity with tracking"""
+    def arbitrate(self, candidates: Dict[str, str], 
+                 verifier_callback: Optional[Any] = None, 
+                 specification: Optional[Any] = None) -> Optional[str]:
+        """Select the best candidate based on Z3 pre-check and simplicity"""
         valid_candidates = {}
         candidate_scores = {}
         
-        print("    Evaluating candidates...")
+        print(f"    Evaluating {len(candidates)} candidates...")
         
         for name, code in candidates.items():
             if not code:
-                print(f"    [{name.upper()}] no code generated")
+                # print(f"    [{name.upper()}] no code generated")
                 continue
             
             clean_code = self._extract_python_code(code)
             if not clean_code:
-                print(f"    [{name.upper()}] no Python code found in response")
+                # print(f"    [{name.upper()}] no Python code found")
                 continue
             
-            # Score based on multiple criteria
-            score = self._calculate_code_score(clean_code, name)
-            candidate_scores[name] = score
-            
-            # Check syntax with better error handling
+            # 1. Syntax Check (Fast)
             syntax_valid, error_msg = self._check_syntax_with_detail(clean_code)
-            if syntax_valid:
-                valid_candidates[name] = clean_code
-                print(f"    [{name.upper()}] valid syntax, score: {score:.1f}")
-            else:
-                print(f"    [{name.upper()}] syntax error: {error_msg}")
+            if not syntax_valid:
+                print(f"    [{name.upper()}] Syntax Error: {error_msg}")
                 continue
-        
+                
+            # 2. Calculate Base Score (Simplicity)
+            score = self._calculate_code_score(clean_code, name)
+            
+            # 3. Z3 Pre-Check (Architectural Requirement: 64.3% -> 91.0%)
+            z3_status = "Skipped"
+            if verifier_callback and specification:
+                try:
+                    is_safe, _ = verifier_callback(clean_code, specification)
+                    if is_safe:
+                        score -= 500  # Massive bonus for verified safety
+                        z3_status = "PASS"
+                    else:
+                        score += 500  # Penalty for proven unsafe
+                        z3_status = "FAIL"
+                except Exception as e:
+                    z3_status = f"Error: {e}"
+            
+            candidate_scores[name] = score
+            valid_candidates[name] = clean_code
+            
+            print(f"    [{name.upper()}] Score: {score:.1f} | Syntax: OK | Z3 Pre-Check: {z3_status}")
+
         if not valid_candidates:
             print("    No valid candidates found")
             return None
         
-        # Select best candidate
+        # Select best candidate (lowest score is best)
         best_name = min(candidate_scores.items(), key=lambda x: x[1])[0]
         best_code = valid_candidates[best_name]
         
         self.last_selected_model = best_name
+        
+        # Track history
         self.model_selection_history.append({
             "selected_model": best_name,
             "all_scores": candidate_scores,
@@ -91,50 +139,33 @@ class LLMEnsemble:
             "timestamp": asyncio.get_event_loop().time()
         })
         
-        print(f"    Selected {best_name.upper()} with score {candidate_scores[best_name]:.1f}")
+        print(f"    >>> Selected {best_name.upper()} (Score: {candidate_scores[best_name]:.1f})")
         return best_code
     
     def _calculate_code_score(self, code: str, model_name: str) -> float:
         """Calculate score for code quality (lower is better)"""
-        score = len(code) * 0.01  # Penalize length less harshly
+        score = len(code) * 0.01  # Penalize length
         
         # Penalize complex constructs
-        if 'if ' in code.lower() or 'elif ' in code.lower() or 'else:' in code.lower():
-            score += 10
-        if 'for ' in code.lower() or 'while ' in code.lower():
-            score += 20
-        if 'return' not in code.lower():
-            score += 50
+        if 'if ' in code.lower(): score += 10
+        if 'elif ' in code.lower(): score += 10
+        if 'while ' in code.lower(): score += 20
         
-        # Penalize certain patterns
-        if 'if else' in code.lower() or 'ternary' in code.lower():
-            score += 30
-        if 'print(' in code.lower():
-            score += 5
+        # Penalize bad patterns
+        if 'print(' in code.lower(): score += 5
         
-        # Count lines (simpler is better)
-        lines = code.strip().split('\n')
-        score += len(lines) * 0.5
-        
-        # Model-specific biases (optional - based on historical performance)
-        if model_name == 'gemini':
-            score += 5  # Slight preference for local models
-        elif model_name == 'deepseek':
-            score += 10  # DeepSeek sometimes generates complex code
+        # Model bias (optional)
+        if model_name == 'gemini': score -= 5
         
         return score
-    
+
     def _check_syntax_with_detail(self, code: str) -> Tuple[bool, str]:
         """Check syntax and return detailed error message"""
         try:
             ast.parse(code)
             return True, "Valid"
         except SyntaxError as e:
-            # Extract line and position info
-            error_msg = f"{e.msg} at line {e.lineno}"
-            if e.offset:
-                error_msg += f", position {e.offset}"
-            return False, error_msg
+            return False, f"{e.msg} at line {e.lineno}"
         except Exception as e:
             return False, str(e)
     

@@ -1,28 +1,28 @@
-from neuro_symbolic_verifier import NeuroSymbolicVerifier
-from safety_specification import create_safety_specifications
+from src.verification.neuro_symbolic_verifier import NeuroSymbolicVerifier
+from src.verification.safety_specification import create_safety_specifications
 import asyncio
-import config
+from src.core import config
 
 async def main():
     """Main execution with comprehensive 4-way model comparison"""
     print("="*80)
     print("NEURO-SYMBOLIC VERIFICATION FRAMEWORK - 4-WAY MODEL COMPARISON")
     print("="*80)
-    print("🔬 Comparing: Gemini 2.5 Flash vs Llama 3 8B vs DeepSeek Coder 1.3B vs Ensemble")
+    print("[Experiment] Comparing: Llama 3 8B vs DeepSeek R1 7B vs Ensemble (Gemini Disabled)")
     
     # Initialize verifier
     verifier = NeuroSymbolicVerifier()
     
     # Get specifications
     specifications = create_safety_specifications()
-    print(f"\n📋 Running experiments on {len(specifications)} safety specifications...")
+    print(f"\n[Tasks] Running experiments on {len(specifications)} safety specifications...")
     
     # Check available models
     available_models = verifier.ensemble.get_available_models()
-    print(f"📊 Available models in ensemble: {', '.join(available_models)}")
+    print(f"[Models] Available models in ensemble: {', '.join(available_models)}")
     
     if 'gemini' not in available_models:
-        print("⚠️  Warning: Gemini not available, running with Llama and DeepSeek only")
+        print("Warning: Gemini not available, running with Llama and DeepSeek only")
     
     # Run comparison experiments for each specification
     results = []
@@ -30,7 +30,7 @@ async def main():
         print(f"\n{'='*60}")
         print(f"EXPERIMENT {i+1}/{len(specifications)}: {spec.id}")
         print(f"{'='*60}")
-        print(f"📝 Requirement: {spec.requirement}")
+        print(f"[Requirement]: {spec.requirement}")
         
         result = await verifier.run_comparison_experiment(spec, max_iterations=3)
         results.append(result)
@@ -41,17 +41,17 @@ async def main():
     
     # Print executive summary with all models
     print("\n" + "="*80)
-    print("EXECUTIVE SUMMARY - 4-WAY COMPARISON")
+    print("EXECUTIVE SUMMARY - 3-WAY COMPARISON (Gemini Disabled)")
     print("="*80)
     
     # Calculate overall statistics
     total_specs = len(results)
     ensemble_passed = sum(1 for r in results if r.get('ensemble_result', {}).get('verification_passed', False))
     
-    print(f"\n✅ ENSEMBLE APPROACH: {ensemble_passed}/{total_specs} ({ensemble_passed/total_specs*100:.1f}%)")
+    print(f"\n[Passed] ENSEMBLE APPROACH: {ensemble_passed}/{total_specs} ({ensemble_passed/total_specs*100:.1f}%)")
     
     # Calculate individual model statistics
-    print("\n🤖 INDIVIDUAL MODEL RESULTS:")
+    print("\n[Models] INDIVIDUAL MODEL RESULTS:")
     print("-" * 50)
     
     individual_stats = verifier.verification_stats.get("individual_model_results", {})
@@ -76,7 +76,7 @@ async def main():
         model_display_name = {
             'gemini': 'Gemini 2.5 Flash',
             'llama': 'Llama 3 8B', 
-            'deepseek': 'DeepSeek Coder 1.3B'
+            'deepseek': 'DeepSeek R1 7B'
         }.get(model_name, model_name)
         
         print(f"{model_display_name:<15} {success_rate:>13.1f}% {avg_iterations:>14.2f} #{rank:<7}")
@@ -88,7 +88,7 @@ async def main():
     print(f"\n{'Ensemble':<15} {ensemble_rate:>13.1f}% {ensemble_iterations:>14.2f} #1" if ensemble_rate >= max(sr for _, sr, _, _ in sorted_models) else "")
     
     # Determine best approach
-    print("\n🏆 PERFORMANCE ANALYSIS:")
+    print("\n[Best] PERFORMANCE ANALYSIS:")
     print("-" * 50)
     
     if sorted_models:
@@ -96,23 +96,23 @@ async def main():
         improvement = ensemble_rate - best_rate
         
         if improvement > 0:
-            print(f"✓ Ensemble approach is BEST by +{improvement:.1f}%")
+            print(f"OK: Ensemble approach is BEST by +{improvement:.1f}%")
             print(f"  Ensemble achieves {ensemble_rate:.1f}% vs {best_model}'s {best_rate:.1f}%")
         elif improvement < 0:
-            print(f"✗ Individual model ({best_model}) is BEST by {abs(improvement):.1f}%")
+            print(f"NO: Individual model ({best_model}) is BEST by {abs(improvement):.1f}%")
             print(f"  {best_model} achieves {best_rate:.1f}% vs Ensemble's {ensemble_rate:.1f}%")
         else:
-            print(f"＝ Ensemble ties with {best_model} at {ensemble_rate:.1f}%")
+            print(f"== Ensemble ties with {best_model} at {ensemble_rate:.1f}%")
         
         # Iteration efficiency
         iteration_improvement = best_avg_iter - ensemble_iterations
         if iteration_improvement > 0:
-            print(f"✓ Ensemble is {iteration_improvement:.2f} iterations faster on average")
+            print(f"OK: Ensemble is {iteration_improvement:.2f} iterations faster on average")
         elif iteration_improvement < 0:
-            print(f"✗ {best_model} is {abs(iteration_improvement):.2f} iterations faster on average")
+            print(f"NO: {best_model} is {abs(iteration_improvement):.2f} iterations faster on average")
     
     # Model strengths analysis
-    print("\n🔍 MODEL STRENGTHS ANALYSIS:")
+    print("\n[Analysis] MODEL STRENGTHS ANALYSIS:")
     print("-" * 50)
     
     # Analyze which models succeeded for which specifications
@@ -135,12 +135,12 @@ async def main():
     for spec_id, analysis in spec_analysis.items():
         passed = analysis['passed_models']
         failed = analysis['failed_models']
-        print(f"  {spec_id:<25} ✓ {', '.join(passed) if passed else 'None'}")
+        print(f"  {spec_id:<25} [PASS] {', '.join(passed) if passed else 'None'}")
         if failed:
-            print(f"{'':<27} ✗ {', '.join(failed)}")
+            print(f"{'':<27} [FAIL] {', '.join(failed)}")
     
     # Final verified codes from ensemble
-    print("\n📝 FINAL ENSEMBLE VERIFIED CODES:")
+    print("\n[Code] FINAL ENSEMBLE VERIFIED CODES:")
     print("-" * 80)
     
     for i, result in enumerate(results):
@@ -157,13 +157,13 @@ async def main():
     
     # Save comprehensive results
     print("\n" + "="*80)
-    print("📊 RESULTS SAVED:")
+    print("\n[Results] RESULTS SAVED in data/:")
     print("-" * 80)
-    print("1. Detailed comparison report (JSON)")
+    print(f"1. Detailed comparison report (JSON): data/model_comparison_report_*.json")
     print("2. Model performance statistics")
     print("3. Individual model verification results")
     print("4. Ensemble verification results")
-    print("\n🎯 Framework successfully verified all specifications with neuro-symbolic approach!")
+    print("\n[Done] Framework successfully verified all specifications with neuro-symbolic approach!")
 
 if __name__ == "__main__":
     asyncio.run(main())

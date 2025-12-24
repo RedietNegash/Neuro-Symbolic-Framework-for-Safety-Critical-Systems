@@ -2,10 +2,10 @@ import ast
 import time
 import json
 from typing import Dict, List, Tuple, Optional, Any
-from llm_ensemble import LLMEnsemble
-from experimental_analyzer import ExperimentalAnalyzer
-from safety_specification import SafetySpecification
-from python_to_z3_converter import PythonToZ3Converter
+from src.models.llm_ensemble import LLMEnsemble
+from src.core.experimental_analyzer import ExperimentalAnalyzer
+from src.verification.safety_specification import SafetySpecification
+from src.verification.python_to_z3_converter import PythonToZ3Converter
 from z3 import *
 
 class NeuroSymbolicVerifier:
@@ -26,31 +26,53 @@ class NeuroSymbolicVerifier:
         }
     
     def generate_initial_prompt(self, specification: SafetySpecification) -> str:
-        """Generate SIMPLE initial prompt for LLM"""
+        """Generate STRICT initial prompt for LLM to ensure verifiable code"""
         variable_names = ", ".join(specification.variables.keys())
         
         return f"""Write a Python function that checks: "{specification.requirement}"
         
-Parameters: {variable_names}
-Return: True if safe, False if unsafe
+STRICT GUIDELINES:
+1. Function name: anything relevant (e.g., check_safety)
+2. Parameters: EXACTLY {variable_names}
+3. Return: True if safe, False if unsafe
+4. USE ONLY simple boolean logic and comparisons.
+6. FORBIDDEN:
+   - NO type checking (type(), isinstance())
+   - NO dictionary/list access (e.g., data['x'])
+   - NO complex Python features (match/case, decorators)
+   - NO extra print statements or conversational text
+   - NO use of 'None' (Python NoneType). Use strings like 'None' or booleans instead.
+7. Output: Provide ONLY the Python code inside a code block.
 
-Write ONLY the function code, nothing else.
+Parameters to use: {variable_names}
 """
-    
+
     def generate_refinement_prompt(self, specification: SafetySpecification,
                                  code: str, counterexample: Dict) -> str:
-        """Generate simple refinement prompt"""
+        """Generate strict refinement prompt with detailed feedback"""
         ce_description = self._format_counterexample(counterexample)
         variable_names = ", ".join(specification.variables.keys())
         
-        return f"""Fix this function for: "{specification.requirement}"
+        return f"""Fix this Python function for: "{specification.requirement}"
         
-Current code:
+The previous code failed verification.
+Error/Counterexample: {ce_description}
+
+Previous code:
+```python
 {code}
+```
 
-Error: {ce_description}
-
-Write the corrected function with parameters: {variable_names}
+STRICT GUIDELINES FOR FIX:
+1. Use EXACTLY these parameters: {variable_names}
+2. Fix the logic to handle the counterexample provided.
+3. USE ONLY simple boolean logic and arithmetic.
+4. FORBIDDEN:
+   - NO type checking (e.g., don't use type() or isinstance())
+   - NO complex data structures
+   - NO use of 'None' (Python NoneType). Use strings like 'None' or booleans instead.
+   - NO conversational filler
+5. Output: Provide ONLY the corrected Python code inside a code block.
 """
     
     def _format_counterexample(self, counterexample: Dict) -> str:
@@ -184,10 +206,10 @@ Write the corrected function with parameters: {variable_names}
             })
             
             if verification_passed:
-                print(f"    ✓ VERIFICATION PASSED")
+                print(f"    [PASS] VERIFICATION PASSED")
                 break
             else:
-                print(f"    ✗ VERIFICATION FAILED - Counterexample: {counterexample}")
+                print(f"    [FAIL] VERIFICATION FAILED - Counterexample: {counterexample}")
                 final_counterexample = counterexample
         
         result = {
@@ -202,48 +224,79 @@ Write the corrected function with parameters: {variable_names}
         return result
     
     def _extract_python_code(self, text: str) -> str:
-        """Extract Python code from LLM response"""
+        """Extract Python code from LLM response with high resilience"""
         if not text:
             return ""
         
+        # 1. Strip thinking tags if they leaked through
+        raw_text = text
+        if "<think>" in raw_text:
+            if "</think>" in raw_text:
+                raw_text = raw_text.split("</think>")[-1].strip()
+            else:
+                raw_text = raw_text.split("<think>")[-1].strip()
+
         import re
         
-        # Look for code blocks first
+        # 2. Look for explicit code blocks (priority)
         patterns = [
+            r'```python\s*(def\s+.*?)\s*```',
             r'```python\s*(.*?)\s*```',
+            r'```\s*(def\s+.*?)\s*```',
             r'```\s*(.*?)\s*```',
         ]
         
         for pattern in patterns:
-            matches = re.findall(pattern, text, re.DOTALL)
+            matches = re.findall(pattern, raw_text, re.DOTALL)
             if matches:
-                extracted = matches[0].strip()
-                if extracted and 'def ' in extracted:
-                    return extracted
+                candidate = matches[0].strip()
+                if 'def ' in candidate:
+                    # Sanity check: Ensure it's not just a conversational fragment
+                    if candidate.count('(') > 0 and 'return' in candidate:
+                        # Attempt to fix trailing unclosed parenthesis
+                        if candidate.count('(') > candidate.count(')') and candidate.endswith('('):
+                            candidate = candidate[:-1].strip()
+                        return candidate
         
-        # If no code block, look for function definition
-        lines = text.split('\n')
+        # 3. Look for function definition directly in text
+        lines = raw_text.split('\n')
         function_start = -1
         function_lines = []
         
         for i, line in enumerate(lines):
-            if line.strip().startswith('def '):
+            # Must start with optional whitespace + def
+            if re.match(r'^\s*def\s+', line):
                 function_start = i
                 function_lines.append(line)
                 break
         
         if function_start >= 0:
-            # Get the rest of the function
             for i in range(function_start + 1, len(lines)):
                 current_line = lines[i]
-                # Stop if we hit another def
-                if current_line.strip().startswith('def '):
+                # Stop if we hit a very obvious non-code line or markdown marker
+                if current_line.strip().startswith('###') or current_line.strip().startswith('```'):
+                    break
+                # If we hit another 'def' at the start of a line, we've found another function
+                if re.match(r'^def\s+', current_line):
                     break
                 function_lines.append(current_line)
             
-            return '\n'.join(function_lines).strip()
+            candidate = '\n'.join(function_lines).strip()
+            if 'def ' in candidate and 'return' in candidate:
+                # Basic balance fix
+                if candidate.count('(') > candidate.count(')'):
+                    if not candidate.endswith(')'):
+                        candidate += ')'
+                return candidate
         
-        return text.strip()
+        # 4. Filter garbage: If the text contains lots of natural language and no clear code structure,
+        # it might be the cause of "unterminated string literal" errors if treated as code.
+        # Check if it looks like a function
+        if 'def ' in raw_text and 'return' in raw_text and '(' in raw_text:
+            return raw_text.strip()
+            
+        # If it doesn't look like code, return empty so iteration/fallback can handle it
+        return ""
     
     async def run_comparison_experiment(self, specification: SafetySpecification,
                                        max_iterations: int = 3) -> Dict:
@@ -352,7 +405,13 @@ Write the corrected function with parameters: {variable_names}
             
             # Generate code with ensemble
             candidates = await self.ensemble.generate_ensemble(prompt)
-            current_code = self.ensemble.arbitrate(candidates)
+            
+            # Use Z3 PRe-Check in arbitration
+            current_code = self.ensemble.arbitrate(
+                candidates,
+                verifier_callback=self.verify_code,
+                specification=specification
+            )
             
             if not current_code:
                 print("    No valid code generated")
@@ -362,10 +421,10 @@ Write the corrected function with parameters: {variable_names}
             verification_passed, counterexample = self.verify_code(current_code, specification)
             
             if verification_passed:
-                print(f"    ✓ PASSED")
+                print(f"    [PASS] PASSED")
                 break
             else:
-                print(f"    ✗ FAILED - Counterexample: {counterexample}")
+                print(f"    [FAIL] FAILED - Counterexample: {counterexample}")
                 final_counterexample = counterexample
         
         result = {
@@ -385,7 +444,7 @@ Write the corrected function with parameters: {variable_names}
         print("="*80)
         
         # 1. Individual Model Performance Summary
-        print("\n📊 INDIVIDUAL MODEL PERFORMANCE:")
+        print("\n[Results] INDIVIDUAL MODEL PERFORMANCE:")
         print("-" * 60)
         print(f"{'Model':<12} {'Success Rate':<15} {'Avg Iterations':<15} {'Total Tests':<12}")
         print("-" * 60)
@@ -398,7 +457,7 @@ Write the corrected function with parameters: {variable_names}
                 print(f"{model_name:<12} {success_rate:>13.1f}% {avg_iterations:>14.2f} {stats['total_tests']:>12}")
         
         # 2. Ensemble Performance Summary
-        print("\n🎯 ENSEMBLE PERFORMANCE:")
+        print("\n[Done] ENSEMBLE PERFORMANCE:")
         print("-" * 60)
         print(f"{'Success Rate':<15} {'Avg Iterations':<15} {'Total Tests':<12}")
         print("-" * 60)
@@ -412,18 +471,18 @@ Write the corrected function with parameters: {variable_names}
             print(f"{ensemble_success_rate:>13.1f}% {avg_iter:>14.2f} {total_specs:>12}")
         
         # 3. Detailed Comparison Per Specification
-        print("\n📋 DETAILED COMPARISON PER SPECIFICATION:")
+        print("\n[Tasks] DETAILED COMPARISON PER SPECIFICATION:")
         print("-" * 80)
         
         for spec_result in self.verification_stats.get("detailed_results", []):
-            print(f"\n🔹 {spec_result['specification_id']}")
+            print(f"\n[Spec] {spec_result['specification_id']}")
             print(f"   Requirement: {spec_result['requirement']}")
             print(f"   {'='*40}")
             
             # Individual model results
             print(f"   INDIVIDUAL MODELS:")
             for model_name, model_result in spec_result.get('individual_model_results', {}).items():
-                status = "✓ PASS" if model_result.get('verification_passed') else "✗ FAIL"
+                status = "[PASS]" if model_result.get('verification_passed') else "[FAIL]"
                 iterations = model_result.get('iterations', 0)
                 print(f"     {model_name.upper():<10} {status:<8} Iterations: {iterations}")
                 if model_result.get('final_code'):
@@ -433,7 +492,7 @@ Write the corrected function with parameters: {variable_names}
             # Ensemble result
             print(f"\n   ENSEMBLE APPROACH:")
             ensemble_result = spec_result.get('ensemble_result', {})
-            status = "✓ PASS" if ensemble_result.get('verification_passed') else "✗ FAIL"
+            status = "[PASS]" if ensemble_result.get('verification_passed') else "[FAIL]"
             iterations = ensemble_result.get('total_iterations', 0)
             print(f"     Status: {status:<8} Iterations: {iterations}")
             if ensemble_result.get('final_code'):
@@ -448,7 +507,7 @@ Write the corrected function with parameters: {variable_names}
                 print(f"   Best model(s): {', '.join(successful_models)}")
         
         # 4. Overall Comparison Table
-        print("\n📈 OVERALL COMPARISON TABLE:")
+        print("\n[Results] OVERALL COMPARISON TABLE:")
         print("-" * 60)
         print(f"{'Approach':<15} {'Success Rate':<15} {'Avg Iterations':<15} {'Speedup':<12}")
         print("-" * 60)
@@ -487,7 +546,7 @@ Write the corrected function with parameters: {variable_names}
         import datetime
         
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"model_comparison_report_{timestamp}.json"
+        filename = f"data/model_comparison_report_{timestamp}.json"
         
         report_data = {
             "timestamp": datetime.datetime.now().isoformat(),
@@ -501,7 +560,7 @@ Write the corrected function with parameters: {variable_names}
                 json.dump(report_data, f, indent=2, default=str)
             print(f"\n📄 Comparison report saved to: {filename}")
         except Exception as e:
-            print(f"\n⚠️ Could not save comparison report: {e}")
+            print(f"\n[Warning] Could not save comparison report: {e}")
     
     def print_detailed_report(self):
         """Print detailed report for all models and specifications"""
@@ -510,7 +569,7 @@ Write the corrected function with parameters: {variable_names}
         print("="*80)
         
         # 1. Overall Statistics
-        print("\n📊 OVERALL VERIFICATION STATISTICS:")
+        print("\n[Results] OVERALL VERIFICATION STATISTICS:")
         print("-" * 40)
         stats = self.verification_stats
         print(f"Total Specifications: {stats['total_verifications']}")
@@ -524,7 +583,7 @@ Write the corrected function with parameters: {variable_names}
         print(f"Average Iterations: {stats['average_iterations']:.2f}")
         
         # 2. Model Performance Comparison
-        print("\n🤖 MODEL PERFORMANCE COMPARISON:")
+        print("\n[Models] MODEL PERFORMANCE COMPARISON:")
         print("-" * 40)
         print(f"{'Model':<12} {'Success Rate':<15} {'Avg Iterations':<15} {'Total':<8}")
         print("-" * 40)

@@ -2,11 +2,11 @@
 import ast
 import random
 from typing import Dict, List, Tuple, Any
-from neuro_symbolic_verifier import NeuroSymbolicVerifier
-from llm_client import GeminiLLMClient
-from llm_client_llama import LlamaLLMClient
-from safety_specification import SafetySpecification, create_safety_specifications
-from python_to_z3_converter import PythonToZ3Converter
+from src.verification.neuro_symbolic_verifier import NeuroSymbolicVerifier
+from src.models.llm_client import GeminiLLMClient
+from src.models.llm_client_llama import LlamaLLMClient
+from src.verification.safety_specification import SafetySpecification, create_safety_specifications
+from src.verification.python_to_z3_converter import PythonToZ3Converter
 from z3 import *
 
 class EvaluationFramework:

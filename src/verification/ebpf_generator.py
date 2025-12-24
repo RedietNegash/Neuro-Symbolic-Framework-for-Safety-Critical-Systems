@@ -1,5 +1,5 @@
 from typing import Dict, List
-from safety_specification import SafetySpecification
+from src.verification.safety_specification import SafetySpecification
 
 class EBPFGenerator:
     """Generates C-like eBPF safety probes from Z3 assertions"""

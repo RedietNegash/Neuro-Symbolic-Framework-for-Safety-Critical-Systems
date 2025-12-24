@@ -1,5 +1,5 @@
 # test_logic.py
-from safety_specification import create_safety_specifications
+from src.verification.safety_specification import create_safety_specifications
 from z3 import *
 
 def test_conditional_logic():

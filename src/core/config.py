@@ -13,7 +13,7 @@ LLAMA_MODEL = os.getenv("LLAMA_MODEL", "llama3:8b")
 LLAMA_HOST = os.getenv("LLAMA_HOST", "http://localhost:11434")
 
 # DeepSeek Configuration
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-coder:1.3b")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-r1:7b")
 DEEPSEEK_HOST = os.getenv("DEEPSEEK_HOST", "http://localhost:11434")
 
 # Select active approach
