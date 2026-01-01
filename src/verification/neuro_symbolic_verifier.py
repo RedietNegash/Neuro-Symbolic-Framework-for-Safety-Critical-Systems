@@ -1,6 +1,8 @@
 import ast
 import time
 import json
+import os
+from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 from src.models.llm_ensemble import LLMEnsemble
 from src.core.experimental_analyzer import ExperimentalAnalyzer
@@ -162,6 +164,32 @@ STRICT GUIDELINES FOR FIX:
             lines.append(line)
         
         return '\n'.join(lines)
+
+    def _save_generated_code(self, spec_id: str, model_name: str, code: str, approach: str = "individual", iteration: Optional[int] = None) -> None:
+        """Save generated Python code to disk organized by specification and approach.
+
+        Files are written to `data/generated_code/{spec_id}/{approach}/{model_name}_iter{n}.py`.
+        """
+        try:
+            if not code:
+                return
+
+            base_dir = Path("data") / "generated_code" / str(spec_id) / approach
+            base_dir.mkdir(parents=True, exist_ok=True)
+
+            safe_name = str(model_name).replace(" ", "_").replace("/", "_")
+            safe_spec = str(spec_id).replace(" ", "_").replace("/", "_")
+            if iteration is None:
+                filename = base_dir / f"{safe_spec}__{safe_name}.py"
+            else:
+                filename = base_dir / f"{safe_spec}__{safe_name}_iter{iteration}.py"
+
+            with open(filename, "w") as f:
+                f.write(code)
+
+            print(f"    Saved generated code: {filename}")
+        except Exception as e:
+            print(f"    [Warning] Could not save generated code for {model_name}: {e}")
     
     async def test_individual_model(self, model_name: str, specification: SafetySpecification, 
                                    prompt: str, max_iterations: int = 3) -> Dict:
@@ -204,6 +232,11 @@ STRICT GUIDELINES FOR FIX:
                 print(f"    No valid Python code extracted")
                 break
             
+            # Save generated code for this model + iteration
+            try:
+                self._save_generated_code(specification.id, model_name, current_code, approach="individual", iteration=iteration+1)
+            except Exception:
+                pass
             print(f"    Generated: {current_code[:80]}{'...' if len(current_code) > 80 else ''}")
             
             # Verify
@@ -416,6 +449,16 @@ STRICT GUIDELINES FOR FIX:
             
             # Generate code with ensemble
             candidates = await self.ensemble.generate_ensemble(prompt)
+
+            # Save each candidate returned by models
+            try:
+                for name, cand_code in candidates.items():
+                    try:
+                        self._save_generated_code(specification.id, name, cand_code, approach="candidate", iteration=iterations)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             
             # Use Z3 PRe-Check in arbitration
             current_code = self.ensemble.arbitrate(
@@ -427,6 +470,12 @@ STRICT GUIDELINES FOR FIX:
             if not current_code:
                 print("    No valid code generated")
                 break
+
+            # Save the arbitrated ensemble code
+            try:
+                self._save_generated_code(specification.id, 'ensemble', current_code, approach='ensemble', iteration=iterations)
+            except Exception:
+                pass
             
             # Verify
             verification_passed, counterexample = self.verify_code(current_code, specification)

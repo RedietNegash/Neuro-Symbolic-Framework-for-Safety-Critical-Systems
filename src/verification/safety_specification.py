@@ -46,59 +46,67 @@ def create_safety_specifications():
     """Factory function to create SIMPLIFIED safety specifications"""
     return [
         SafetySpecification(
-            id="drone_altitude",
-            requirement="The drone altitude must be between 40 and 60 meters.",
-            formal_property="And(altitude >= 40, altitude <= 60)",
-            variables={"altitude": "real"},
-            mission_goals=["Maintain safe altitude"],
-            safety_invariants=["Altitude bounds"]
-        ),
-        SafetySpecification(
-            id="execution_time_limit",
-            requirement="The execution time must be 10 or less.",
-            formal_property="execution_time <= 10",
-            variables={"execution_time": "int"},
-            mission_goals=["Meet timing requirements"],
-            safety_invariants=["Timing constraint"]
-        ),
-        SafetySpecification(
-            id="fault_tolerance",
-            requirement="If IMU1 fails, active IMU must be 2.",
-            formal_property="Implies(imu1_failed, active_imu == 2)",
-            variables={"imu1_failed": "bool", "active_imu": "int"},
-            mission_goals=["Handle failures"],
-            safety_invariants=["Redundancy"]
-        ),
-        SafetySpecification(
-            id="velocity_difference",
-            requirement="GPS and IMU velocities must differ by at most 2.0.",
-            formal_property="Abs(gps_vel - imu_vel) <= 2.0",
-            variables={"gps_vel": "real", "imu_vel": "real"},
-            mission_goals=["Maintain sensor consistency"],
-            safety_invariants=["Sensor fusion"]
-        ),
-        SafetySpecification(
-            id="invalid_signature",
-            requirement="If signature is invalid, action must be 'None'.",
-            formal_property="Implies(Not(is_signature_valid), action == StringVal('None'))",
-            variables={"is_signature_valid": "bool", "action": "string"},
-            mission_goals=["Ensure security"],
-            safety_invariants=["Authentication"]
-        ),
-        SafetySpecification(
-            id="low_battery",
-            requirement="If battery is below 15, command must be 'RTH'.",
-            formal_property="Implies(battery_level < 15, command == StringVal('RTH'))",
-            variables={"battery_level": "int", "command": "string"},
-            mission_goals=["Safe operation"],
-            safety_invariants=["Power management"]
-        ),
-        SafetySpecification(
-            id="memory_usage",
-            requirement="Heap usage must be 80 or less.",
-            formal_property="heap_usage <= 80",
-            variables={"heap_usage": "int"},
-            mission_goals=["Prevent overflow"],
-            safety_invariants=["Memory safety"]
+            id="boundary_enforcement",
+            requirement="Drone must stay within geographical boundaries. If outside, must initiate corrective action.",
+            formal_property="Implies(outside_boundary, corrective_action)",
+            variables={"outside_boundary": "bool", "corrective_action": "bool"},
+            mission_goals=["Stay within safe zone"],
+            safety_invariants=["Boundary compliance"]
         )
+        # SafetySpecification(
+        #     id="drone_altitude",
+        #     requirement="The drone altitude must be between 40 and 60 meters.",
+        #     formal_property="And(altitude >= 40, altitude <= 60)",
+        #     variables={"altitude": "real"},
+        #     mission_goals=["Maintain safe altitude"],
+        #     safety_invariants=["Altitude bounds"]
+        # ),
+        # SafetySpecification(
+        #     id="execution_time_limit",
+        #     requirement="The execution time must be 10 or less.",
+        #     formal_property="execution_time <= 10",
+        #     variables={"execution_time": "int"},
+        #     mission_goals=["Meet timing requirements"],
+        #     safety_invariants=["Timing constraint"]
+        # ),
+        # SafetySpecification(
+        #     id="fault_tolerance",
+        #     requirement="If IMU1 fails, active IMU must be 2.",
+        #     formal_property="Implies(imu1_failed, active_imu == 2)",
+        #     variables={"imu1_failed": "bool", "active_imu": "int"},
+        #     mission_goals=["Handle failures"],
+        #     safety_invariants=["Redundancy"]
+        # ),
+        # SafetySpecification(
+        #     id="velocity_difference",
+        #     requirement="GPS and IMU velocities must differ by at most 2.0.",
+        #     formal_property="Abs(gps_vel - imu_vel) <= 2.0",
+        #     variables={"gps_vel": "real", "imu_vel": "real"},
+        #     mission_goals=["Maintain sensor consistency"],
+        #     safety_invariants=["Sensor fusion"]
+        # ),
+        # SafetySpecification(
+        #     id="invalid_signature",
+        #     requirement="If signature is invalid, action must be 'None'.",
+        #     formal_property="Implies(Not(is_signature_valid), action == StringVal('None'))",
+        #     variables={"is_signature_valid": "bool", "action": "string"},
+        #     mission_goals=["Ensure security"],
+        #     safety_invariants=["Authentication"]
+        # ),
+        # SafetySpecification(
+        #     id="low_battery",
+        #     requirement="If battery is below 15, command must be 'RTH'.",
+        #     formal_property="Implies(battery_level < 15, command == StringVal('RTH'))",
+        #     variables={"battery_level": "int", "command": "string"},
+        #     mission_goals=["Safe operation"],
+        #     safety_invariants=["Power management"]
+        # ),
+        # SafetySpecification(
+        #     id="memory_usage",
+        #     requirement="Heap usage must be 80 or less.",
+        #     formal_property="heap_usage <= 80",
+        #     variables={"heap_usage": "int"},
+        #     mission_goals=["Prevent overflow"],
+        #     safety_invariants=["Memory safety"]
+        # )
     ]
