@@ -1,6 +1,10 @@
 from src.verification.neuro_symbolic_verifier import NeuroSymbolicVerifier
 from src.verification.safety_specification import create_safety_specifications
 import asyncio
+import sys
+import json
+import datetime
+from pathlib import Path
 
 async def main():
     print("="*80)
@@ -24,8 +28,41 @@ async def main():
         print(f"EXPERIMENT {i+1}/{len(specifications)}: {spec.id}")
         print(f"{'='*60}")
         print(f"[Requirement]: {spec.requirement}")
-        
-        result = await verifier.run_comparison_experiment(spec, max_iterations=3)
+        # Prepare per-spec log file and tee stdout so nested prints are captured
+        log_dir = Path("data") / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_path = log_dir / f"{spec.id}__{timestamp}.log"
+        json_path = log_dir / f"{spec.id}__{timestamp}.json"
+
+        class Tee:
+            def __init__(self, *streams):
+                self.streams = streams
+            def write(self, data):
+                for s in self.streams:
+                    s.write(data)
+            def flush(self):
+                for s in self.streams:
+                    try:
+                        s.flush()
+                    except Exception:
+                        pass
+
+        with open(log_path, 'w') as lf:
+            old_stdout = sys.stdout
+            sys.stdout = Tee(old_stdout, lf)
+            try:
+                result = await verifier.run_comparison_experiment(spec, max_iterations=3)
+            finally:
+                sys.stdout = old_stdout
+
+        # Save JSON summary for the spec
+        try:
+            with open(json_path, 'w') as jf:
+                json.dump(result, jf, indent=2, default=str)
+        except Exception as e:
+            print(f"[Warning] Could not save JSON summary for {spec.id}: {e}")
+
         results.append(result)
     
     print("\n" + "="*80)
