@@ -2,6 +2,7 @@ import ast
 import time
 import json
 import os
+import textwrap
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 from src.models.llm_ensemble import LLMEnsemble
@@ -11,6 +12,105 @@ from src.verification.python_to_z3_converter import PythonToZ3Converter
 from src.verification.loop_invariant_synthesizer import LoopInvariantSynthesizer
 from z3 import *
 
+
+class FormalVerifier:
+    """Formal Verification Component using Z3, aligned with user's snippet behavior."""
+
+    def __init__(self):
+        self.solver = Solver()
+
+    def verify_safety_property(self, python_code: str, specification: SafetySpecification) -> Dict[str, Any]:
+        start_time = time.time()
+        try:
+            # Parse and convert Python code to Z3 assertions
+            tree = ast.parse(python_code)
+            converter = PythonToZ3Converter(specification.z3_vars)
+            converter.visit(tree)
+
+            code_assertions = getattr(converter, 'assertions', []) or []
+            if code_assertions:
+                code_expr = And(*code_assertions)
+            else:
+                code_expr = BoolVal(True)
+
+            # Prepare z3 vars mapping
+            if getattr(specification, 'z3_vars', None):
+                z3_vars = specification.z3_vars.copy()
+            else:
+                z3_vars = {}
+                for var_name, var_type in getattr(specification, 'variables', {}).items():
+                    if var_type in ('int', 'I', 'Int'):
+                        z3_vars[var_name] = Int(var_name)
+                    elif var_type in ('float', 'real', 'Real'):
+                        z3_vars[var_name] = Real(var_name)
+                    elif var_type in ('bool', 'Bool'):
+                        z3_vars[var_name] = Bool(var_name)
+                    else:
+                        # fallback to Int
+                        z3_vars[var_name] = Int(var_name)
+
+            # Evaluate safety property expression
+            safety_z3 = eval(specification.formal_property, globals(), z3_vars)
+
+            implication = Implies(code_expr, safety_z3)
+            negated_implication = Not(implication)
+
+            self.solver.reset()
+            self.solver.set('timeout', 10000)
+            self.solver.add(negated_implication)
+
+            result = self.solver.check()
+            verification_time = time.time() - start_time
+
+            if result == sat:
+                model = self.solver.model()
+                counterexample = {}
+                for decl in model.decls():
+                    try:
+                        val = model[decl]
+                        # best-effort type extraction
+                        if is_int_value(val):
+                            counterexample[decl.name()] = val.as_long()
+                        elif is_rational_value(val):
+                            try:
+                                counterexample[decl.name()] = float(val.as_decimal(10))
+                            except Exception:
+                                counterexample[decl.name()] = str(val)
+                        else:
+                            counterexample[decl.name()] = str(val)
+                    except Exception:
+                        counterexample[decl.name()] = str(model[decl])
+
+                return {
+                    'verified': False,
+                    'counterexample': counterexample,
+                    'reason': 'Property violation found',
+                    'verification_time': verification_time
+                }
+            elif result == unsat:
+                return {
+                    'verified': True,
+                    'counterexample': None,
+                    'reason': 'Property always holds',
+                    'verification_time': verification_time
+                }
+            else:
+                return {
+                    'verified': False,
+                    'counterexample': None,
+                    'reason': 'Solver unknown or timeout',
+                    'verification_time': verification_time
+                }
+
+        except Exception as e:
+            return {
+                'verified': False,
+                'counterexample': None,
+                'reason': f'Verification error: {e}',
+                'verification_time': time.time() - start_time
+            }
+
+
 class NeuroSymbolicVerifier:
     """Main neuro-symbolic verification framework with individual model testing"""
     
@@ -18,6 +118,7 @@ class NeuroSymbolicVerifier:
         self.ensemble = LLMEnsemble()
         self.analyzer = ExperimentalAnalyzer()
         self.invariant_synthesizer = LoopInvariantSynthesizer()
+        self.formal_verifier = FormalVerifier()
         self.verification_stats = {
             "total_verifications": 0,
             "successful_verifications": 0,
@@ -91,7 +192,7 @@ STRICT GUIDELINES FOR FIX:
         return f"Failed for inputs: {', '.join(parts)}"
     
     def verify_code(self, code_string: str, specification: SafetySpecification) -> Tuple[bool, Optional[Dict]]:
-        """Verify code against formal specification using Z3"""
+        """Verify code against formal specification using Z3 with bidirectional checking"""
         try:
             # Clean the code string
             code_string = self._clean_code(code_string)
@@ -108,9 +209,6 @@ STRICT GUIDELINES FOR FIX:
                 solver.add(assertion)
             
             # [Step D1-D4] Loop Invariant Synthesis (Lightweight)
-            # Only runs if loops are detected, adds strengthening constraints
-            # We pass a fast LLM client (e.g. Gemini) if available for D3 Naturalization
-            # Since strict time limits apply, we prioritize using 'gemini' (Flash) if active, else None.
             fast_client = self.ensemble.clients.get('gemini') 
             invariants = self.invariant_synthesizer.synthesize(code_string, specification, llm_client=fast_client)
             for inv in invariants:
@@ -119,17 +217,50 @@ STRICT GUIDELINES FOR FIX:
             # Get property expression
             property_expr = eval(specification.formal_property, globals(), specification.z3_vars)
             
-            # Check if code implies property
+            # ==========================================
+            # BIDIRECTIONAL VERIFICATION (EQUIVALENCE)
+            # ==========================================
+            
+            # CHECK 1: Does code satisfy specification?
+            # (Code should never violate the property)
+            solver.push()
             solver.add(Not(property_expr))
             result = solver.check()
+            solver.pop()
             
             if result == sat:
                 model = solver.model()
                 counterexample = {}
                 for decl in model.decls():
                     counterexample[decl.name()] = str(model[decl])
+                print(f"    [DEBUG] Code violates specification: {counterexample}")
                 return False, counterexample
-            elif result == unsat:
+            
+            # CHECK 2: Is code over-conservative?
+            # (If specification allows something, code shouldn't reject it)
+            # Check if there exists: property is True BUT code assertions are False
+            if converter.assertions:
+                solver.push()
+                solver.add(property_expr)  # Specification is satisfied
+                
+                # Check if code would return False in this case
+                code_logic = And(converter.assertions) if len(converter.assertions) > 1 else converter.assertions[0]
+                solver.add(Not(code_logic))  # But code returns False
+                
+                result2 = solver.check()
+                solver.pop()
+                
+                if result2 == sat:
+                    model = solver.model()
+                    counterexample = {}
+                    for decl in model.decls():
+                        counterexample[decl.name()] = str(model[decl])
+                    counterexample["error"] = "Code is over-conservative (rejects valid safe states)"
+                    print(f"    [DEBUG] Code is over-conservative: {counterexample}")
+                    return False, counterexample
+            
+            # Both checks passed
+            if result == unsat:
                 return True, None
             else:
                 return False, {"error": "Z3 timeout or unknown"}
@@ -137,7 +268,7 @@ STRICT GUIDELINES FOR FIX:
         except Exception as e:
             print(f"Verification error: {e}")
             return False, {"error": str(e)}
-    
+        
     def _clean_code(self, code_string: str) -> str:
         """Clean LLM-generated code"""
         # Remove markdown code blocks
@@ -162,8 +293,18 @@ STRICT GUIDELINES FOR FIX:
             if ': str' in line:
                 line = line.replace(': str', '')
             lines.append(line)
-        
-        return '\n'.join(lines)
+        cleaned = '\n'.join(lines)
+
+        # Normalize indentation and remove accidental leading/trailing blank lines
+        try:
+            cleaned = textwrap.dedent(cleaned)
+        except Exception:
+            pass
+
+        # Remove any leading/trailing whitespace lines
+        cleaned = '\n'.join([l.rstrip() for l in cleaned.split('\n')]).strip('\n')
+
+        return cleaned
 
     def _save_generated_code(self, spec_id: str, model_name: str, code: str, approach: str = "individual", iteration: Optional[int] = None) -> None:
         """Save generated Python code to disk organized by specification and approach.
@@ -184,8 +325,14 @@ STRICT GUIDELINES FOR FIX:
             else:
                 filename = base_dir / f"{safe_spec}__{safe_name}_iter{iteration}.py"
 
+            # Prefer to save a cleaned version to avoid AST parsing errors later
+            try:
+                code_to_write = self._clean_code(code)
+            except Exception:
+                code_to_write = code
+
             with open(filename, "w") as f:
-                f.write(code)
+                f.write(code_to_write)
 
             print(f"    Saved generated code: {filename}")
         except Exception as e:
