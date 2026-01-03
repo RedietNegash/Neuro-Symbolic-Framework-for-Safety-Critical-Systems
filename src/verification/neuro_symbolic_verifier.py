@@ -192,83 +192,18 @@ STRICT GUIDELINES FOR FIX:
         return f"Failed for inputs: {', '.join(parts)}"
     
     def verify_code(self, code_string: str, specification: SafetySpecification) -> Tuple[bool, Optional[Dict]]:
-        """Verify code against formal specification using Z3 with bidirectional checking"""
+        """Verify code against formal specification using Z3"""
+        # Delegate to FormalVerifier for consistent behavior
         try:
-            # Clean the code string
-            code_string = self._clean_code(code_string)
-            
-            # Parse and verify
-            tree = ast.parse(code_string)
-            converter = PythonToZ3Converter(specification.z3_vars)
-            converter.visit(tree)
-            
-            solver = Solver()
-            solver.set("timeout", 10000)  # 10 second timeout
-            
-            for assertion in converter.assertions:
-                solver.add(assertion)
-            
-            # [Step D1-D4] Loop Invariant Synthesis (Lightweight)
-            fast_client = self.ensemble.clients.get('gemini') 
-            invariants = self.invariant_synthesizer.synthesize(code_string, specification, llm_client=fast_client)
-            for inv in invariants:
-                solver.add(inv)
-            
-            # Get property expression
-            property_expr = eval(specification.formal_property, globals(), specification.z3_vars)
-            
-            # ==========================================
-            # BIDIRECTIONAL VERIFICATION (EQUIVALENCE)
-            # ==========================================
-            
-            # CHECK 1: Does code satisfy specification?
-            # (Code should never violate the property)
-            solver.push()
-            solver.add(Not(property_expr))
-            result = solver.check()
-            solver.pop()
-            
-            if result == sat:
-                model = solver.model()
-                counterexample = {}
-                for decl in model.decls():
-                    counterexample[decl.name()] = str(model[decl])
-                print(f"    [DEBUG] Code violates specification: {counterexample}")
-                return False, counterexample
-            
-            # CHECK 2: Is code over-conservative?
-            # (If specification allows something, code shouldn't reject it)
-            # Check if there exists: property is True BUT code assertions are False
-            if converter.assertions:
-                solver.push()
-                solver.add(property_expr)  # Specification is satisfied
-                
-                # Check if code would return False in this case
-                code_logic = And(converter.assertions) if len(converter.assertions) > 1 else converter.assertions[0]
-                solver.add(Not(code_logic))  # But code returns False
-                
-                result2 = solver.check()
-                solver.pop()
-                
-                if result2 == sat:
-                    model = solver.model()
-                    counterexample = {}
-                    for decl in model.decls():
-                        counterexample[decl.name()] = str(model[decl])
-                    counterexample["error"] = "Code is over-conservative (rejects valid safe states)"
-                    print(f"    [DEBUG] Code is over-conservative: {counterexample}")
-                    return False, counterexample
-            
-            # Both checks passed
-            if result == unsat:
+            cleaned = self._clean_code(code_string)
+            result = self.formal_verifier.verify_safety_property(cleaned, specification)
+            if result.get('verified'):
                 return True, None
             else:
-                return False, {"error": "Z3 timeout or unknown"}
-                
+                return False, result.get('counterexample') or {"error": result.get('reason')}
         except Exception as e:
-            print(f"Verification error: {e}")
             return False, {"error": str(e)}
-        
+    
     def _clean_code(self, code_string: str) -> str:
         """Clean LLM-generated code"""
         # Remove markdown code blocks
