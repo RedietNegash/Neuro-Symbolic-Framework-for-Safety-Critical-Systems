@@ -1,298 +1,227 @@
-# symbolic_bridge.py
-import ast
-import z3
-from typing import Dict, Any, List
+# symbolic_bridge.py - FIXED VERSION
 
-class ASTToZ3Translator:
+import ast
+from z3 import *
+from typing import Dict, Any
+
+class ASTToZ3Translator(ast.NodeVisitor):
     """
-    Fixed Symbolic Bridge Component with Robust Inlining
+    Translates Python AST to Z3 expressions for formal verification
     """
     
-    def __init__(self):
-        self.variables = {}
-        self.current_function = None
-        self.condition_assignments = {}  
-        
-    def python_code_to_z3(self, code_snippet: str, function_name: str = None) -> z3.BoolRef:
-        """Parse Python code and convert to Z3 expressions"""
+    def __init__(self, z3_vars=None):
+        self.z3_vars = z3_vars if z3_vars is not None else {}
+        self.result_expr = None
+    
+    def python_code_to_z3(self, python_code: str, z3_vars=None):
+        """
+        Main entry point: Convert Python function code to Z3 expression
+        z3_vars: Dictionary of pre-created Z3 variables to use (CRITICAL!)
+        """
+        # Use provided variables if given - THIS IS THE KEY FIX
+        if z3_vars is not None:
+            self.z3_vars = z3_vars.copy()
+            
         try:
-            clean_code = self._clean_document_code(code_snippet)
+            # Parse the Python code
+            tree = ast.parse(python_code)
             
-            if not clean_code.startswith('def '):
-                clean_code = f"def temp_function():\n    return {clean_code}"
-            
-            tree = ast.parse(clean_code)
-            self.current_function = function_name
-            self.variables = {}
-            self.condition_assignments = {}
-            
+            # Find the function definition
+            func_def = None
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef):
-                    return self.visit_FunctionDef(node)
+                    func_def = node
+                    break
             
-            return z3.BoolVal(True)
+            if not func_def:
+                print("DEBUG: No function definition found")
+                return BoolVal(True)
+            
+            # ONLY create variables if they don't already exist
+            for arg in func_def.args.args:
+                var_name = arg.arg
+                if var_name not in self.z3_vars:
+                    # Determine type based on name
+                    if any(keyword in var_name.lower() for keyword in ['initiated', 'is_', 'enabled', 'active']):
+                        self.z3_vars[var_name] = Bool(var_name)
+                    else:
+                        self.z3_vars[var_name] = Real(var_name)
+                    print(f"DEBUG: Created new variable {var_name} (type: {type(self.z3_vars[var_name])})")
+            
+            # Process the function body - find the return statement
+            if func_def.body:
+                for stmt in func_def.body:
+                    result = self._process_statement(stmt)
+                    # If we found a return statement, use it
+                    if not (isinstance(result, BoolRef) and result.eq(BoolVal(True))):
+                        print(f"DEBUG: Translation result type: {type(result)}")
+                        print(f"DEBUG: Translation result: {result}")
+                        return result
+                    # For Return statements specifically
+                    if isinstance(stmt, ast.Return):
+                        print(f"DEBUG: Translation result type: {type(result)}")
+                        print(f"DEBUG: Translation result: {result}")
+                        return result
+            
+            return BoolVal(True)
             
         except Exception as e:
-            print(f"Translation error: {e}")
-            return z3.BoolVal(False)
+            print(f"DEBUG: Translation error: {e}")
+            import traceback
+            traceback.print_exc()
+            return BoolVal(True)
     
-    def visit(self, node):
-        """Dispatch method for visiting AST nodes"""
-        method_name = 'visit_' + node.__class__.__name__
-        visitor = getattr(self, method_name, self.generic_visit)
-        return visitor(node)
+    def _process_statement(self, stmt):
+        """Process a statement node"""
+        if isinstance(stmt, ast.Return):
+            if stmt.value is None:
+                return BoolVal(True)
+            return self._process_expression(stmt.value)
+        elif isinstance(stmt, ast.If):
+            return self._process_if(stmt)
+        else:
+            print(f"DEBUG: Unhandled statement type: {type(stmt)}")
+            return BoolVal(True)
     
-    def visit_FunctionDef(self, node):
-        """Visit function definition"""
-        for stmt in node.body:
-            if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
-                target = stmt.targets[0]
-                if isinstance(target, ast.Name):
-                    var_name = target.id
-                    if self._is_condition_variable_name(var_name):
-                        self.condition_assignments[var_name] = stmt.value
+    def _process_if(self, if_node):
+        """
+        Convert if-statement to Z3 If expression
+        Example: if distance < 20: return speed <= 10; else: return True
+        Becomes: If(distance < 20, speed <= 10, True)
+        """
+        condition = self._process_expression(if_node.test)
         
-
-        conditions = []
-        return_found = False
+        then_value = BoolVal(True)
+        if if_node.body:
+            for stmt in if_node.body:
+                if isinstance(stmt, ast.Return):
+                    then_value = self._process_expression(stmt.value)
+                    break
         
-        for stmt in node.body:
-            result = self.visit(stmt)
-            if result is not None:
-                if isinstance(result, tuple) and result[0] == 'return':
-                    return_found = True
-                    conditions.append(result[1])
+        else_value = BoolVal(True)
+        if if_node.orelse:
+            for stmt in if_node.orelse:
+                if isinstance(stmt, ast.Return):
+                    else_value = self._process_expression(stmt.value)
+                    break
+                elif isinstance(stmt, ast.If):
+                    else_value = self._process_if(stmt)
+                    break
+        
+        return If(condition, then_value, else_value)
+    
+    def _process_expression(self, expr):
+        """Process an expression node"""
+        if expr is None:
+            return BoolVal(True)
+        
+        # Handle boolean/numeric constants
+        if isinstance(expr, ast.Constant):
+            if isinstance(expr.value, bool):
+                return BoolVal(expr.value)
+            elif isinstance(expr.value, (int, float)):
+                return RealVal(expr.value)
+            else:
+                return BoolVal(True)
+        
+        # Handle Name (variable reference) - CRITICAL PATH
+        elif isinstance(expr, ast.Name):
+            var_name = expr.id
+            if var_name in self.z3_vars:
+                return self.z3_vars[var_name]
+            else:
+                print(f"DEBUG: Variable {var_name} not found in z3_vars!")
+                # Create the variable if it doesn't exist
+                if any(keyword in var_name.lower() for keyword in ['initiated', 'is_', 'enabled', 'active']):
+                    self.z3_vars[var_name] = Bool(var_name)
                 else:
-                    conditions.append(result)
+                    self.z3_vars[var_name] = Real(var_name)
+                return self.z3_vars[var_name]
         
-        if conditions:
-            if return_found:
-                return conditions[-1] 
-            return z3.And(conditions)
-        return z3.BoolVal(True)
+        # Handle comparison operators
+        elif isinstance(expr, ast.Compare):
+            return self._process_compare(expr)
+        
+        # Handle boolean operators (and, or, not)
+        elif isinstance(expr, ast.BoolOp):
+            return self._process_boolop(expr)
+        
+        # Handle unary operators (not)
+        elif isinstance(expr, ast.UnaryOp):
+            return self._process_unaryop(expr)
+        
+        # Default
+        else:
+            print(f"DEBUG: Unhandled expression type: {type(expr)}")
+            return BoolVal(True)
     
-    def visit_Return(self, node):
-        """Visit return statement"""
-        return ('return', self.visit(node.value))
-    
-    def visit_If(self, node):
-        """Visit if statement - convert to implication"""
-        test_condition = self.visit(node.test)
+    def _process_compare(self, compare_node):
+        """
+        Process comparison operations
+        Example: distance < 20, speed <= 10
+        """
+        left = self._process_expression(compare_node.left)
         
-        then_conditions = []
-        for stmt in node.body:
-            result = self.visit(stmt)
-            if result is not None:
-                if isinstance(result, tuple) and result[0] == 'return':
-                    then_conditions.append(result[1])
-                else:
-                    then_conditions.append(result)
-        
-        then_expr = z3.And(then_conditions) if then_conditions else z3.BoolVal(True)
-        
-        else_conditions = []
-        for stmt in node.orelse:
-            result = self.visit(stmt)
-            if result is not None:
-                if isinstance(result, tuple) and result[0] == 'return':
-                    else_conditions.append(result[1])
-                else:
-                    else_conditions.append(result)
-        
-        else_expr = z3.And(else_conditions) if else_conditions else z3.BoolVal(True)
-        
-        return z3.And(
-            z3.Implies(test_condition, then_expr),
-            z3.Implies(z3.Not(test_condition), else_expr)
-        )
-
-    def visit_Compare(self, node):
-        """Visit comparison operations"""
-        left = self.visit(node.left)
-        
-        if len(node.ops) == 1 and len(node.comparators) == 1:
-            op = node.ops[0]
-            right = self.visit(node.comparators[0])
+        # Handle multiple comparisons (e.g., a < b < c)
+        if len(compare_node.ops) == 1:
+            op = compare_node.ops[0]
+            right = self._process_expression(compare_node.comparators[0])
             
-            if (hasattr(left, 'sort') and left.sort() == z3.StringSort()) or \
-            (hasattr(right, 'sort') and right.sort() == z3.StringSort()):
+            if isinstance(op, ast.Lt):
+                return left < right
+            elif isinstance(op, ast.LtE):
+                return left <= right
+            elif isinstance(op, ast.Gt):
+                return left > right
+            elif isinstance(op, ast.GtE):
+                return left >= right
+            elif isinstance(op, ast.Eq):
+                return left == right
+            elif isinstance(op, ast.NotEq):
+                return left != right
+        
+        # Handle chained comparisons
+        else:
+            conditions = []
+            current_left = left
+            for op, comparator in zip(compare_node.ops, compare_node.comparators):
+                current_right = self._process_expression(comparator)
                 
-                if isinstance(op, ast.Eq):
-                    return z3.Bool(f"str_eq_{str(left)}_{str(right)}")
+                if isinstance(op, ast.Lt):
+                    conditions.append(current_left < current_right)
+                elif isinstance(op, ast.LtE):
+                    conditions.append(current_left <= current_right)
+                elif isinstance(op, ast.Gt):
+                    conditions.append(current_left > current_right)
+                elif isinstance(op, ast.GtE):
+                    conditions.append(current_left >= current_right)
+                elif isinstance(op, ast.Eq):
+                    conditions.append(current_left == current_right)
                 elif isinstance(op, ast.NotEq):
-                    return z3.Not(z3.Bool(f"str_neq_{str(left)}_{str(right)}"))
-                else:
-                    return z3.BoolVal(True)
-            else:
-                return self.visit_compare_op(op, left, right)
-        else:
-            result = None
-            prev = left
-            for op, comparator in zip(node.ops, node.comparators):
-                current = self.visit_compare_op(op, prev, self.visit(comparator))
-                if result is None:
-                    result = current
-                else:
-                    result = z3.And(result, current)
-                prev = self.visit(comparator)
-            return result
-    
-    def visit_compare_op(self, op, left, right):
-        """Handle comparison operators with type checking"""
-        if z3.is_int(left) and z3.is_real(right):
-            left = z3.ToReal(left)
-        elif z3.is_real(left) and z3.is_int(right):
-            right = z3.ToReal(right)
-        
-        if isinstance(op, ast.Eq):
-            return left == right
-        elif isinstance(op, ast.NotEq):
-            return left != right
-        elif isinstance(op, ast.Lt):
-            return left < right
-        elif isinstance(op, ast.LtE):
-            return left <= right
-        elif isinstance(op, ast.Gt):
-            return left > right
-        elif isinstance(op, ast.GtE):
-            return left >= right
-        else:
-            return left == right
-    
-    def visit_BoolOp(self, node):
-        """Visit boolean operations with robust type casting"""
-        values = [self.visit(value) for value in node.values]
-        
-        bool_values = []
-        for val in values:
-            if hasattr(val, 'sort'):
-                if val.sort() == z3.BoolSort():
-                    bool_values.append(val)
-                else:
-                    bool_values.append(val != 0)
-            else:
-                bool_values.append(z3.BoolVal(bool(val)))
-        
-        if isinstance(node.op, ast.And):
-            return z3.And(bool_values)
-        elif isinstance(node.op, ast.Or):
-            return z3.Or(bool_values)
-        else:
-            return z3.And(bool_values)
-
-    def visit_UnaryOp(self, node):
-        """Visit unary operations (not) with proper type handling"""
-        if isinstance(node.op, ast.Not):
-            operand = self.visit(node.operand)
-            if hasattr(operand, 'sort') and operand.sort() != z3.BoolSort():
-                return z3.Not(operand != 0)
-            return z3.Not(operand)
-        return self.generic_visit(node)
-    
-    def visit_BinOp(self, node):
-        """Visit binary operations"""
-        left = self.visit(node.left)
-        right = self.visit(node.right)
-        
-        if isinstance(node.op, ast.Add):
-            return left + right
-        elif isinstance(node.op, ast.Sub):
-            return left - right
-        elif isinstance(node.op, ast.Mult):
-            return left * right
-        elif isinstance(node.op, ast.Div):
-            return left / right
-        else:
-            return left
-
-    def visit_Name(self, node):
-        """Visit variable names - inline condition variables"""
-        var_name = node.id
-        
-        if var_name in self.condition_assignments:
-            return self.visit(self.condition_assignments[var_name])
-        
-
-        if var_name not in self.variables:
-            if var_name == "action":
-                self.variables[var_name] = z3.Bool(f"action_is_Grasp")
-            elif "is_holding" in var_name:
-                self.variables[var_name] = z3.Bool(var_name)
-            elif any(pattern in var_name for pattern in ["altitude", "speed", "distance", "voltage"]):
-                self.variables[var_name] = z3.Real(var_name)
-            else:
-                self.variables[var_name] = z3.Real(var_name)
-        
-        return self.variables[var_name]
-    
-    def visit_Constant(self, node):
-        """Visit constants with proper type handling"""
-        if isinstance(node.value, bool):
-            return z3.BoolVal(node.value)
-        elif isinstance(node.value, int):
-            return z3.IntVal(node.value)
-        elif isinstance(node.value, float):
-            return z3.RealVal(node.value)
-        elif isinstance(node.value, str):
-            return z3.StringVal(node.value)
-        else:
-            return z3.IntVal(0)
-    
-    def visit_Assign(self, node):
-        """Visit assignment statements - track condition variables but don't create Z3 variables"""
-        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            var_name = node.targets[0].id
-            if self._is_condition_variable_name(var_name):
-                return z3.BoolVal(True) 
-            value = self.visit(node.value)
+                    conditions.append(current_left != current_right)
+                
+                current_left = current_right
             
-            if var_name not in self.variables:
-                if self._expression_produces_boolean(node.value):
-                    self.variables[var_name] = z3.Bool(var_name)
-                else:
-                    self.variables[var_name] = z3.Real(var_name)
-            
-            return self.variables[var_name] == value
+            return And(*conditions)
         
-        return z3.BoolVal(True)
-
-    def _is_condition_variable_name(self, var_name):
-        """Check if variable name indicates it's a condition variable"""
-        condition_patterns = ['condition_', 'premise_', 'consequent_', 'antecedent_', 'conclusion_']
-        return any(pattern in var_name for pattern in condition_patterns)
-
-    def _expression_produces_boolean(self, ast_node):
-        """Check if an AST node produces a Boolean result"""
-        if isinstance(ast_node, ast.Compare):
-            return True
-        if isinstance(ast_node, ast.BoolOp):
-            return True
-        if isinstance(ast_node, ast.UnaryOp):
-            return True
-        if isinstance(ast_node, ast.Call):
-            return True
-        if isinstance(ast_node, ast.Name) and ast_node.id in self.variables:
-            return z3.is_bool(self.variables[ast_node.id])
-        
-        return False
+        return BoolVal(True)
     
-    def visit_Call(self, node):
-        """Visit function calls - limited support"""
-        return z3.BoolVal(True)
-    
-    def generic_visit(self, node):
-        """Generic visitor for unsupported nodes"""
-        return z3.BoolVal(True)
-    
-    def _clean_document_code(self, code: str) -> str:
-        """Clean code while preserving document-style patterns"""
-        lines = code.split('\n')
-        clean_lines = []
+    def _process_boolop(self, boolop_node):
+        """Process boolean operations (and, or)"""
+        values = [self._process_expression(v) for v in boolop_node.values]
         
-        for line in lines:
-            if line.strip().startswith('def ') or line.strip().startswith('return '):
-                clean_lines.append(line)
-            elif line.strip().startswith('if ') or line.strip().startswith('else:'):
-                clean_lines.append(line)
+        if isinstance(boolop_node.op, ast.And):
+            return And(*values)
+        elif isinstance(boolop_node.op, ast.Or):
+            return Or(*values)
         
-        return '\n'.join(clean_lines) if clean_lines else code
+        return BoolVal(True)
+    
+    def _process_unaryop(self, unaryop_node):
+        """Process unary operations (not)"""
+        operand = self._process_expression(unaryop_node.operand)
+        
+        if isinstance(unaryop_node.op, ast.Not):
+            return Not(operand)
+        
+        return operand
