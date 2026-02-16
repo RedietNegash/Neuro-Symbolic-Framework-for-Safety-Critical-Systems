@@ -1,3 +1,4 @@
+
 # python_to_z3_converter.py
 import ast
 from typing import Dict, List, Optional, Any
@@ -227,6 +228,6 @@ class PythonToZ3Converter(ast.NodeVisitor):
             
             print(f"DEBUG_CONVERTER: Added RTA for {task_i.name}: {rta_fixed_point_assertion}")
             print(f"DEBUG_CONVERTER: Added Deadline Check for {task_i.name}: {deadline_assertion}")
-        schedulability_holds = And(self.temporal_constraints)
+        schedulability_holds = ast.And(self.temporal_constraints)
         self.z3_vars["schedulability_holds"] = schedulability_holds
         return [schedulability_holds]
