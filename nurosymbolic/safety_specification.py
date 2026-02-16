@@ -1,3 +1,4 @@
+
 # safety_specification.py
 import math
 from dataclasses import dataclass
@@ -238,37 +239,92 @@ def create_safety_specifications():
     )
 
     specifications.append(thermal_spec)
-
-    alt_spec = SafetySpecification(
-        id="drone_altitude",
-        requirement="The drone's altitude must always be between 40m and 60m in 'AltHold' mode.",
-        ambiguous_prompt="The drone must maintain altitude between 40 and 60 meters.",
-        formal_property="And(altitude >= 40, altitude <= 60)",
-        variables={"altitude": "real"},
-        correct_python_code="def check_altitude(alt):\n    return 40 <= alt <= 60"
+    # This is what ArduPilot is already implementing!
+    battery_warning_spec = SafetySpecification(
+        id="battery_failsafe_protection",
+        requirement="If battery voltage drops below 10.5V for 10 seconds, must initiate RTL",
+        formal_property="Implies(And(battery_voltage < 10.5, low_voltage_duration > 10.0), rtl_initiated)",
+        variables={
+            "battery_voltage": "real",
+            "low_voltage_duration": "real",
+            "rtl_initiated": "bool"
+        }
     )
-    specifications.append(alt_spec)  
+    specifications.append(battery_warning_spec)
+
+    altitude_spec = SafetySpecification(
+        id="drone_altitude",
+        requirement="Drone must maintain altitude between 40m and 60m",
+        formal_property="And(alt >= 40, alt <= 60)",  # Changed from 'altitude' to 'alt'
+        variables={"alt": "real"}  # Changed from 'altitude' to 'alt'
+    )
+    specifications.append(altitude_spec)  
 
     speed_spec = SafetySpecification(
         id="speed_obstacle", 
         requirement="The drone's speed must never exceed 10m/s when an obstacle is detected within 20m.",
         ambiguous_prompt="The drone should slow down near obstacles.",
         formal_property="Implies(distance < 20, speed <= 10)",
-        variables={"speed": "real", "distance": "real"},
-        correct_python_code="def safe_speed(speed, distance):\n    if distance < 20:\n        return speed <= 10\n    return True"
-        ),
+        variables={"speed": "real", "distance": "real"}
+        )
     specifications.append(speed_spec)  
 
     robotic_spec = SafetySpecification(
         id="robotic_grasp",
         requirement="The robotic arm must never perform a Grasp action if the object is already held.",
         ambiguous_prompt="The robot should handle grasping objects safely.", 
-        formal_property="Implies(action_is_Grasp == True, Not(is_holding))",
-        variables={"is_holding": "bool", "action_is_Grasp": "bool"},
-        correct_python_code="""def can_grasp(is_holding, action_is_Grasp):
-    return not (action_is_Grasp and is_holding)"""
+        formal_property="Implies(action == 'Grasp', Not(is_holding))",  # String comparison
+        variables={"is_holding": "bool", "action": "string"}  # action is a string
     )
-    specifications.append(robotic_spec)  
+    specifications.append(robotic_spec) 
+
+    low_voltage_cutoff = SafetySpecification(
+        id="low_voltage_cutoff",
+        requirement="If battery voltage drops below 10.5V, immediately RTL",
+        formal_property="Implies(battery_voltage < 10.5, rtl_initiated)",
+        variables={
+            "battery_voltage": "real",
+            "rtl_initiated": "bool" 
+        }
+    )
+    specifications.append(low_voltage_cutoff)
+
+    geofence_violation = SafetySpecification(
+        id="geofence_violation",
+        requirement="If drone exits geofence boundary, must initiate RTL or LAND within 2 seconds",
+        formal_property="Implies(outside_geofence, And(response_time <= 2.0, Or(rtl_initiated, land_initiated)))",
+        variables={
+            "outside_geofence": "bool",
+            "response_time": "real",
+            "rtl_initiated": "bool",
+            "land_initiated": "bool"
+        }
+    )
+    specifications.append(geofence_violation)
+
+    # Add this to your specifications list
+    watchdog_monitoring = SafetySpecification(
+        id="watchdog_monitoring",
+        requirement="If any critical task fails to report health for 2 seconds, must initiate RTL",
+        formal_property="Implies(And(critical_task_failed, task_health_age > 2.0), rtl_initiated)",
+        variables={
+            "critical_task_failed": "bool",
+            "task_health_age": "real",
+            "rtl_initiated": "bool"
+        }
+    )
+    specifications.append(watchdog_monitoring)
+    
+    emergency_landing = SafetySpecification(
+        id="emergency_landing",
+        requirement="If communication is lost for more than 5 seconds, initiate emergency landing",
+        formal_property="Implies(And(comms_lost == True, time_since_loss > 5.0), landing_initiated)",
+        variables={
+            "comms_lost": "bool",
+            "time_since_loss": "real",
+            "landing_initiated": "bool"
+        }
+    )
+    specifications.append(emergency_landing)
 
     return specifications
-
