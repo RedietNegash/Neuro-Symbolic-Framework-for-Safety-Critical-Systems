@@ -2,7 +2,7 @@
 
 A closed-loop **Generate–Test–Critique–Refine** pipeline that combines LLM code generation (Gemini / Llama) with formal verification via the **Z3 SMT solver**, producing code that provably satisfies safety properties for safety-critical systems such as autonomous drones and robotics.
 
-📄 Accepted at PanAfriCon AI 2025.
+* Accepted at PanAfriCon AI 2025.
 
 ## How It Works
 
