@@ -2,7 +2,7 @@
 
 A closed-loop **Generate–Test–Critique–Refine** pipeline that combines LLM code generation (Gemini / Llama) with formal verification via the **Z3 SMT solver**, producing code that provably satisfies safety properties for safety-critical systems such as autonomous drones and robotics.
 
-Accepted at PanAfriCon AI 2025.
+📄 Accepted at PanAfriCon AI 2025.
 
 ## How It Works
 
@@ -14,29 +14,31 @@ Accepted at PanAfriCon AI 2025.
 
 ## Results
 
-Evaluated on four safety-critical scenarios (drone altitude, speed–obstacle, robotic grasp, rotation limit), each run 20x to account for LLM non-determinism:
+Evaluated on four safety-critical scenarios (drone altitude, speed–obstacle, robotic grasp, rotation limit), each run 20x to account for LLM non-determinism. Results shown per model (LLM-only vs. NeuroVerify-Code):
 
-| Metric | LLM-only | NeuroVerify-Code |
+| Metric | Llama (LLM-only → NeuroVerify) | Gemini (LLM-only → NeuroVerify) |
 |---|---|---|
-| Logical consistency | 75% | **100%** |
-| Boundary-condition accuracy | — | **+75%** |
-| Conditional-logic accuracy | — | **+50%** |
-| Mean refinement iterations | — | 1.2–1.25 |
+| Logical consistency | 75% → **100%** | 75% → **100%** |
+| Boundary-condition accuracy | 25% → **100%** | 25% → **100%** |
+| Conditional-logic accuracy | 50% → **100%** | 50% → **100%** |
+| Mean refinement iterations | 1.00 → 1.25 | 0.98 → 1.20 |
+
+Across both models, NeuroVerify-Code reached 100% logical consistency versus 75% for the LLM-only baseline, with only ~1.2–1.25 refinement iterations on average.
 
 ## Repository Structure
 
 ```
 nurosymbolic/
-├── main.py                          
-├── experiment_runner.py            
-├── Generate-Test-Critique-Refine.py
-├── llm_client.py                   
-├── neuro_symbolic_verifier.py      
-├── symbolic_bridge.py               
-├── python_to_z3_converter.py       
-├── safety_specification.py         
-├── gold_standard.py                 
-├── example_usage.py                
+├── main.py                          ->  Entry point
+├── experiment_runner.py             ->  Full benchmark evaluation
+├── Generate-Test-Critique-Refine.py ->  Core refinement loop
+├── llm_client.py                    ->  LLM provider interface (Gemini / Llama)
+├── neuro_symbolic_verifier.py       ->  Verification orchestration
+├── symbolic_bridge.py               -> AST to symbolic representation
+├── python_to_z3_converter.py        ->  SMT-LIB constraint generation
+├── safety_specification.py          ->  Safety property definitions
+├── gold_standard.py                 ->  Reference correct implementations
+├── example_usage.py                 ->  Minimal usage example
 ├── natural_language_specifications.txt
 ├── requirements.txt
 └── logs/
@@ -46,7 +48,7 @@ nurosymbolic/
 
 ```bash
 git clone https://github.com/RedietNegash/Neuro-Symbolic-Framework-for-Safety-Critical-Systems.git
-cd Neuro-Symbolic-Framework-for-for-Safety-Critical-Systems/nurosymbolic
+cd Neuro-Symbolic-Framework-for-Safety-Critical-Systems/nurosymbolic
 pip install -r requirements.txt
 ```
 
@@ -55,9 +57,9 @@ Then update `config.py` with your LLM provider (Gemini or Llama) and API credent
 ## Usage
 
 ```bash
-python main.py              
-python experiment_runner.py  
-python example_usage.py      
+python main.py               ->  Run the pipeline on a single task
+python experiment_runner.py  ->  Run the full benchmark evaluation
+python example_usage.py      ->  Minimal example
 ```
 
 ## Author
