@@ -27,16 +27,16 @@ Evaluated on four safety-critical scenarios (drone altitude, speed–obstacle, r
 
 ```
 nurosymbolic/
-├── main.py                          # Entry point
-├── experiment_runner.py             # Full benchmark evaluation
-├── Generate-Test-Critique-Refine.py # Core refinement loop
-├── llm_client.py                    # LLM provider interface (Gemini / Llama)
-├── neuro_symbolic_verifier.py       # Verification orchestration
-├── symbolic_bridge.py               # AST to symbolic representation
-├── python_to_z3_converter.py        # SMT-LIB constraint generation
-├── safety_specification.py          # Safety property definitions
-├── gold_standard.py                 # Reference correct implementations
-├── example_usage.py                 # Minimal usage example
+├── main.py                          
+├── experiment_runner.py            
+├── Generate-Test-Critique-Refine.py
+├── llm_client.py                   
+├── neuro_symbolic_verifier.py      
+├── symbolic_bridge.py               
+├── python_to_z3_converter.py       
+├── safety_specification.py         
+├── gold_standard.py                 
+├── example_usage.py                
 ├── natural_language_specifications.txt
 ├── requirements.txt
 └── logs/
@@ -45,7 +45,7 @@ nurosymbolic/
 ## Installation
 
 ```bash
-git clone https://github.com/RedietNegash/Neuro-Symbolic-Framework-for-for-Safety-Critical-Systems.git
+git clone https://github.com/RedietNegash/Neuro-Symbolic-Framework-for-Safety-Critical-Systems.git
 cd Neuro-Symbolic-Framework-for-for-Safety-Critical-Systems/nurosymbolic
 pip install -r requirements.txt
 ```
@@ -55,9 +55,9 @@ Then update `config.py` with your LLM provider (Gemini or Llama) and API credent
 ## Usage
 
 ```bash
-python main.py               # Run the pipeline on a single task
-python experiment_runner.py  # Run the full benchmark evaluation
-python example_usage.py      # Minimal example
+python main.py              
+python experiment_runner.py  
+python example_usage.py      
 ```
 
 ## Author
